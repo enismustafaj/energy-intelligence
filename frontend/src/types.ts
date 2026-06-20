@@ -36,12 +36,14 @@ export type Advice = {
   category: string;
   device_id: number | null;
   severity: "info" | "warning" | "high" | string;
+  status: "open" | "resolved" | string;
   title: string;
   body: string;
   benefit_eur: number | null;
   advice: AdviceProjection | null;
   action_type: string | null;
   action_label: string | null;
+  agent_actionable: boolean;
 };
 
 export type HouseholdView = {
@@ -57,4 +59,15 @@ export type ActionEvent = {
   message: string;
   status: string;
   expected_savings_eur?: number | null;
+  resolved_fact_key?: string | null;
+};
+
+export type ChatTurn = {
+  role: "user" | "agent";
+  text: string;
+};
+
+export type ChatReply = {
+  message: string;
+  source: "openai" | "fallback";
 };

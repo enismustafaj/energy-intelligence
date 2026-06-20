@@ -13,7 +13,10 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from .. import actions  # noqa: F401 ensure builtin actions register
 from .. import rules
+from ..actions import builtin  # noqa: F401
+from ..actions.base import ActionError, get_action
 from ..ai.phraser import get_phraser
 from ..ai.template_phraser import ACTION_LABELS
 from ..analytics import facts as facts_mod
@@ -35,6 +38,15 @@ NODE_META = {
     "heat_pump": {"icon": "♨️", "label": "Heat pump"},
     "ev": {"icon": "🚗", "label": "EV"},
     "contract": {"icon": "📄", "label": "Contract"},
+}
+
+# These are direct mocked device-control operations the agent can execute
+# without waiting on a human/vendor workflow. Other recommendations remain
+# manual tasks and are resolved by the user when completed.
+AGENT_ACTIONABLE_KEYS = {
+    "schedule_ev_charge",
+    "shift_heatpump_to_cheap_window",
+    "set_battery_reserve",
 }
 
 
@@ -116,6 +128,7 @@ def _ranked_advice(conn: sqlite3.Connection, household_id: str) -> list[dict]:
         body = pi.body if pi else f.detail
         action_label = (pi.action_label if pi and pi.action_label
                         else ACTION_LABELS.get(f.suggested_action_key or ""))
+        agent_actionable = _agent_actionable(conn, household_id, f.suggested_action_key)
         # Persist as a detected insight (carries category/device/benefit/advice).
         row = facts_mod.fact_to_event_row(f, phrased_text=body)
         row.update({
@@ -123,9 +136,10 @@ def _ranked_advice(conn: sqlite3.Connection, household_id: str) -> list[dict]:
             "benefit_eur": r.benefit_eur or None,
             "advice_json": r.advice.model_dump_json() if r.advice else None,
         })
-        upsert_detected_insight(conn, row)
+        persisted = upsert_detected_insight(conn, row)
+        status = persisted["status"]
 
-        out.append({
+        item = {
             "fact_key": f.key,
             "category": f.category,
             "device_id": f.device_id,
@@ -136,5 +150,22 @@ def _ranked_advice(conn: sqlite3.Connection, household_id: str) -> list[dict]:
             "advice": r.advice.model_dump() if r.advice else None,
             "action_type": f.suggested_action_key,
             "action_label": action_label,
-        })
+            "agent_actionable": agent_actionable,
+            "status": status,
+        }
+        if status != "resolved":
+            out.append(item)
     return out
+
+
+def _agent_actionable(conn: sqlite3.Connection, household_id: str, action_key: str | None) -> bool:
+    if not action_key or action_key not in AGENT_ACTIONABLE_KEYS:
+        return False
+    action = get_action(action_key)
+    if action is None:
+        return False
+    try:
+        action.validate(conn, household_id, {})
+    except ActionError:
+        return False
+    return True

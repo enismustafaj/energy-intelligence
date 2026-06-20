@@ -47,7 +47,7 @@ python3 -m venv .venv
 (cd frontend && npm install)
 
 .venv/bin/hauswatt seed                 # load the dataset into data.db (~140k rows)
-.venv/bin/hauswatt serve                # FastAPI API backend on :8000
+.venv/bin/hauswatt serve --port 18000  # FastAPI API backend on :18000
 (cd frontend && npm run dev)              # React frontend on :5173
 ```
 
@@ -71,12 +71,14 @@ under `/api`, plus the existing action and SSE routes.
 
 ```bash
 cd frontend
-npm run dev       # Vite on :5173, proxying /api to :8000
+npm run dev       # Vite on :5173, proxying /api to :18000
 npm run build     # production bundle in frontend/dist
 ```
 
 For a deployed frontend served from a different origin, set
-`VITE_API_BASE_URL` to the backend origin before building.
+`VITE_API_BASE_URL` to the backend origin before building. For local dev, the
+Vite proxy now defaults to `http://127.0.0.1:18000`; override it with
+`HAUSWATT_API_ORIGIN` if you need a different backend target.
 
 ## AI phrasing backends
 
@@ -92,6 +94,18 @@ Both go through the same `Phraser` protocol and the same number-grounding
 post-check, so the guarantee holds regardless of provider. If a backend's SDK or
 key is unavailable, it falls back to the template phraser.
 
+## Agent chat
+
+The dashboard chat uses the backend `/api/chat/{household_id}` endpoint. Set
+`OPENAI_API_KEY` before starting the backend to enable real LLM replies:
+
+```bash
+OPENAI_API_KEY=... DARKENERGY_CHAT_MODEL=gpt-4o-mini .venv/bin/hauswatt serve --port 18000
+```
+
+If no key is configured, the endpoint returns a deterministic fallback message
+instead of calling OpenAI.
+
 ## Tests
 
 ```bash
@@ -106,4 +120,5 @@ energy-balance invariant, and the phraser never surfaces an ungrounded number.
 
 All settings are environment variables prefixed `DARKENERGY_` (see
 `hauswatt/config.py`): `DB_PATH`, `DATASET_DIR`, `PHRASER_BACKEND`,
-`CLAUDE_MODEL`, `OPENAI_MODEL`, `HOST`, `PORT`, `BALANCE_EPSILON_KW`.
+`CLAUDE_MODEL`, `OPENAI_MODEL`, `CHAT_MODEL`, `HOST`, `PORT`,
+`BALANCE_EPSILON_KW`.

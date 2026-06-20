@@ -33,13 +33,12 @@ import {
   TrendingDown,
   TriangleAlert,
   X,
-  Zap,
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { API_BASE_URL, getHouseholdView, listHouseholds, runAction } from "./api";
+import { API_BASE_URL, getHouseholdView, listHouseholds, runAction, sendChatMessage, updateAdviceStatus } from "./api";
 import "./styles.css";
-import type { ActionEvent, Advice, EnergyNode, Household, HouseholdView } from "./types";
+import type { ActionEvent, Advice, ChatTurn, EnergyNode, Household, HouseholdView } from "./types";
 
 const theme = createTheme({
   primaryColor: "energy",
@@ -56,7 +55,7 @@ type Route = { name: "home" } | { name: "household"; householdId: string };
 
 type ActiveSelection = { type: "all" } | { type: "contract" } | { type: "device"; deviceId: number };
 
-type ActionOption = { type: string; label: string };
+type ActionOption = { type: string; label: string; factKey?: string };
 
 type ChatMsg = {
   id: string;
@@ -64,8 +63,24 @@ type ChatMsg = {
   text: string;
   savings?: number | null;
   status?: string;
-  suggestions?: ActionOption[];
 };
+
+type ChatThread = {
+  title: string;
+  factKey?: string;
+  resolved?: boolean;
+  messages: ChatMsg[];
+};
+
+const GENERAL_THREAD_KEY = "general";
+
+function agentGreeting(): ChatMsg {
+  return {
+    id: "greet",
+    role: "agent",
+    text: "Hi — I'm your HausWatt agent. Pick a recommendation to start a dedicated thread, or ask me about this household.",
+  };
+}
 
 function parseRoute(): Route {
   const match = window.location.pathname.match(/^\/h\/([^/]+)$/);
@@ -253,15 +268,22 @@ function Dashboard({ householdId }: { householdId: string }) {
   const [view, setView] = useState<HouseholdView | null>(null);
   const [selection, setSelection] = useState<ActiveSelection>({ type: "all" });
   const [chatOpen, setChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMsg[]>(() => [
-    {
-      id: "greet",
-      role: "agent",
-      text: "Hi — I'm your HausWatt agent. I can run actions on your devices. Tap an action, or ask me to run one.",
+  const [activeThreadKey, setActiveThreadKey] = useState(GENERAL_THREAD_KEY);
+  const [chatThreads, setChatThreads] = useState<Record<string, ChatThread>>(() => ({
+    [GENERAL_THREAD_KEY]: {
+      title: "Household chat",
+      messages: [agentGreeting()],
     },
-  ]);
+  }));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [resolvingFactKeys, setResolvingFactKeys] = useState<string[]>([]);
+  const activeThreadKeyRef = useRef(activeThreadKey);
+
+  useEffect(() => {
+    activeThreadKeyRef.current = activeThreadKey;
+  }, [activeThreadKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -272,6 +294,13 @@ function Dashboard({ householdId }: { householdId: string }) {
         if (!cancelled) {
           setView(data);
           setSelection({ type: "all" });
+          setActiveThreadKey(GENERAL_THREAD_KEY);
+          setChatThreads({
+            [GENERAL_THREAD_KEY]: {
+              title: "Household chat",
+              messages: [agentGreeting()],
+            },
+          });
         }
       })
       .catch(() => {
@@ -288,7 +317,7 @@ function Dashboard({ householdId }: { householdId: string }) {
   // All advice arrives with the household view in one call; filter it in-memory
   // as the selection changes instead of re-fetching from the backend.
   const advice = useMemo<Advice[]>(() => {
-    const all = view?.advice ?? [];
+    const all = (view?.advice ?? []).filter((item) => item.status !== "resolved");
     if (selection.type === "contract") return all.filter((a) => a.category === "contract");
     if (selection.type === "device") return all.filter((a) => a.device_id === selection.deviceId);
     return all.slice(0, 5); // unfiltered default: top N across everything
@@ -299,10 +328,27 @@ function Dashboard({ householdId }: { householdId: string }) {
     const stream = new EventSource(`${API_BASE_URL}/api/stream/${householdId}`);
     stream.addEventListener("action", (event) => {
       const data = JSON.parse((event as MessageEvent).data) as ActionEvent;
-      setChatMessages((prev) => [
-        ...prev,
-        { id: msgId(), role: "agent", text: data.message, savings: data.expected_savings_eur, status: data.status },
-      ]);
+      const threadKey = data.resolved_fact_key ?? activeThreadKeyRef.current;
+      if (data.resolved_fact_key) {
+        setView((prev) =>
+          prev ? { ...prev, advice: prev.advice.filter((item) => item.fact_key !== data.resolved_fact_key) } : prev,
+        );
+        setChatThreads((prev) => {
+          const thread = prev[data.resolved_fact_key as string];
+          if (!thread) return prev;
+          return {
+            ...prev,
+            [data.resolved_fact_key as string]: { ...thread, resolved: true },
+          };
+        });
+      }
+      pushMsg(threadKey, {
+        role: "agent",
+        text: data.message,
+        savings: data.expected_savings_eur,
+        status: data.status,
+      });
+      setActiveThreadKey(threadKey);
       setChatOpen(true);
     });
     return () => stream.close();
@@ -322,32 +368,146 @@ function Dashboard({ householdId }: { householdId: string }) {
   }, [selection, view]);
 
   const actionOptions: ActionOption[] = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const a of advice) if (a.action_type) map.set(a.action_type, a.action_label || "Run action");
-    return Array.from(map, ([type, label]) => ({ type, label }));
+    const map = new Map<string, ActionOption>();
+    for (const a of advice) {
+      if (a.action_type && !map.has(a.action_type)) {
+        map.set(a.action_type, { type: a.action_type, label: a.action_label || "Run action", factKey: a.fact_key });
+      }
+    }
+    return Array.from(map.values());
   }, [advice]);
 
-  const pushMsg = (m: Omit<ChatMsg, "id">) => setChatMessages((prev) => [...prev, { ...m, id: msgId() }]);
+  const activeThread = chatThreads[activeThreadKey] ?? chatThreads[GENERAL_THREAD_KEY];
+  const chatMessages = activeThread?.messages ?? [];
+  const activeRecommendationFactKey = activeThread?.factKey;
+  const activeThreadResolved = Boolean(activeThread?.resolved);
 
-  async function runAgentAction(actionType: string) {
+  function pushMsg(threadKey: string, m: Omit<ChatMsg, "id">) {
+    setChatThreads((prev) => {
+      const existing = prev[threadKey] ?? {
+          title: threadKey === GENERAL_THREAD_KEY ? "Household chat" : "Recommendation",
+          factKey: threadKey === GENERAL_THREAD_KEY ? undefined : threadKey,
+          resolved: false,
+          messages: threadKey === GENERAL_THREAD_KEY ? [agentGreeting()] : [],
+        };
+      return {
+        ...prev,
+        [threadKey]: {
+          ...existing,
+          messages: [...existing.messages, { ...m, id: msgId() }],
+        },
+      };
+    });
+  }
+
+  const chatTurns = (messages: ChatMsg[]): ChatTurn[] =>
+    messages.map((message) => ({ role: message.role, text: message.text }));
+
+  async function runAgentAction(actionType: string, recommendationFactKey?: string) {
     try {
-      await runAction(householdId, actionType);
+      await runAction(householdId, actionType, recommendationFactKey);
       // success message arrives via the SSE 'action' stream
     } catch (err) {
-      pushMsg({ role: "agent", text: err instanceof Error ? err.message : "That action isn't available.", status: "failed" });
+      pushMsg(recommendationFactKey ?? activeThreadKey, {
+        role: "agent",
+        text: err instanceof Error ? err.message : "That action isn't available.",
+        status: "failed",
+      });
     }
   }
 
-  // called when the user clicks an action button on a card
-  function handleAction(actionType: string, label: string) {
+  function recommendationSpec(item: Advice): string {
+    const bits = [`Recommendation: ${item.title}.`, item.body];
+    if (item.benefit_eur) bits.push(`Estimated impact: save about €${formatEuro(item.benefit_eur)}/yr.`);
+    if (item.advice?.baseline_cost_eur != null && item.advice.counterfactual_cost_eur != null) {
+      bits.push(
+        `Current annual cost is about €${formatEuro(item.advice.baseline_cost_eur)} and the recommendation projects €${formatEuro(item.advice.counterfactual_cost_eur)}.`,
+      );
+    }
+    if (item.advice?.payback_years) bits.push(`Expected payback is about ${Math.round(item.advice.payback_years)} years.`);
+    return bits.join(" ");
+  }
+
+  function ensureRecommendationThread(item: Advice) {
+    setChatThreads((prev) => {
+      const existing = prev[item.fact_key];
+      return {
+        ...prev,
+        [item.fact_key]: {
+          title: item.action_label || item.title,
+          factKey: item.fact_key,
+          resolved: existing?.resolved ?? false,
+          messages: existing?.messages ?? [],
+        },
+      };
+    });
+  }
+
+  async function askAgent(message: string, recommendationFactKey?: string) {
+    const threadKey = recommendationFactKey ?? GENERAL_THREAD_KEY;
     setChatOpen(true);
-    pushMsg({ role: "user", text: label });
-    runAgentAction(actionType);
+    setActiveThreadKey(threadKey);
+    const history = chatTurns(chatThreads[threadKey]?.messages ?? []);
+    pushMsg(threadKey, { role: "user", text: message });
+    setChatBusy(true);
+    try {
+      const reply = await sendChatMessage(householdId, message, history, recommendationFactKey);
+      pushMsg(threadKey, { role: "agent", text: reply.message });
+    } catch (err) {
+      pushMsg(threadKey, {
+        role: "agent",
+        text: err instanceof Error ? err.message : "The agent could not respond.",
+        status: "failed",
+      });
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  function handleRecommendation(item: Advice) {
+    ensureRecommendationThread(item);
+    askAgent(`Execute the mocked action for this recommendation now. Do not ask for confirmation.\n\n${item.title}\n\n${recommendationSpec(item)}`, item.fact_key)
+      .then(() => {
+        if (item.agent_actionable && item.action_type) {
+          runAgentAction(item.action_type, item.fact_key);
+        }
+      });
+  }
+
+  async function handleResolveAdvice(item: Advice) {
+    setResolvingFactKeys((prev) => [...prev, item.fact_key]);
+    try {
+      await updateAdviceStatus(householdId, item.fact_key, "resolved");
+      setView((prev) => (prev ? { ...prev, advice: prev.advice.filter((entry) => entry.fact_key !== item.fact_key) } : prev));
+      setChatThreads((prev) => {
+        const existing = prev[item.fact_key];
+        return {
+          ...prev,
+          [item.fact_key]: {
+            title: existing?.title ?? item.title,
+            factKey: item.fact_key,
+            resolved: true,
+            messages: existing?.messages ?? [],
+          },
+        };
+      });
+    } catch (err) {
+      const threadKey = item.fact_key;
+      ensureRecommendationThread(item);
+      setChatOpen(true);
+      setActiveThreadKey(threadKey);
+      pushMsg(threadKey, {
+        role: "agent",
+        text: err instanceof Error ? err.message : "Could not resolve that recommendation.",
+        status: "failed",
+      });
+    } finally {
+      setResolvingFactKeys((prev) => prev.filter((factKey) => factKey !== item.fact_key));
+    }
   }
 
   // called when the user types into the chat
   function handleChatSubmit(text: string) {
-    pushMsg({ role: "user", text });
     const lc = text.toLowerCase();
     const match = actionOptions.find(
       (o) =>
@@ -355,14 +515,8 @@ function Dashboard({ householdId }: { householdId: string }) {
         lc.includes(o.label.toLowerCase()) ||
         o.label.toLowerCase().split(/\s+/).some((w) => w.length > 3 && lc.includes(w)),
     );
-    if (match) {
-      pushMsg({ role: "agent", text: `On it — running "${match.label}".` });
-      runAgentAction(match.type);
-    } else if (actionOptions.length) {
-      pushMsg({ role: "agent", text: "I can run any of these for you:", suggestions: actionOptions });
-    } else {
-      pushMsg({ role: "agent", text: "There are no actions available for this selection right now." });
-    }
+    const threadFactKey = activeRecommendationFactKey ?? match?.factKey;
+    askAgent(text, threadFactKey);
   }
 
   if (loading)
@@ -383,6 +537,12 @@ function Dashboard({ householdId }: { householdId: string }) {
 
   const featured = advice[0] ?? null;
   const rest = advice.slice(1);
+  const chatThreadList = Object.entries(chatThreads).map(([key, thread]) => ({
+    key,
+    title: thread.title,
+    count: thread.messages.length,
+    resolved: Boolean(thread.resolved),
+  }));
 
   return (
     <>
@@ -441,16 +601,30 @@ function Dashboard({ householdId }: { householdId: string }) {
             </Button>
           )}
         </Group>
-        <AdviceList advice={rest.length ? rest : featured ? [] : advice} onAction={handleAction} emptyAll={!featured} />
+        <AdviceList
+          advice={rest.length ? rest : featured ? [] : advice}
+          onAction={handleRecommendation}
+          onResolve={handleResolveAdvice}
+          resolvingFactKeys={resolvingFactKeys}
+          emptyAll={!featured}
+        />
       </Stack>
 
       <ChatPanel
         open={chatOpen}
-        onOpen={() => setChatOpen(true)}
+        onOpen={() => {
+          setActiveThreadKey(GENERAL_THREAD_KEY);
+          setChatOpen(true);
+        }}
         onClose={() => setChatOpen(false)}
+        title={activeThread?.title ?? "Household chat"}
+        threads={chatThreadList}
+        activeThreadKey={activeThreadKey}
+        onSelectThread={setActiveThreadKey}
         messages={chatMessages}
         onSubmit={handleChatSubmit}
-        onRun={handleAction}
+        busy={chatBusy}
+        disabled={activeThreadResolved}
       />
     </>
   );
@@ -700,10 +874,14 @@ function EnergyScene({
 function AdviceList({
   advice,
   onAction,
+  onResolve,
+  resolvingFactKeys,
   emptyAll,
 }: {
   advice: Advice[];
-  onAction: (actionType: string, label: string) => void;
+  onAction: (advice: Advice) => void;
+  onResolve: (advice: Advice) => void;
+  resolvingFactKeys: string[];
   emptyAll?: boolean;
 }) {
   if (!advice.length)
@@ -750,13 +928,22 @@ function AdviceList({
               </Text>
             </Group>
           )}
-          {item.action_type && (
-            <Group justify="flex-end" mt="sm">
-              <Button size="sm" color="energy" leftSection={<Zap size={15} />} onClick={() => onAction(item.action_type as string, item.action_label || "Take action")}>
-                {item.action_label || "Take action"}
+          <Group justify="flex-end" mt="sm">
+            {item.agent_actionable ? (
+              <Button size="sm" color="energy" leftSection={<MessageSquare size={15} />} onClick={() => onAction(item)}>
+                {item.action_label || "Describe action needed"}
               </Button>
-            </Group>
-          )}
+            ) : (
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => onResolve(item)}
+                loading={resolvingFactKeys.includes(item.fact_key)}
+              >
+                Resolve
+              </Button>
+            )}
+          </Group>
         </Card>
       ))}
     </Stack>
@@ -767,16 +954,26 @@ function ChatPanel({
   open,
   onOpen,
   onClose,
+  title,
+  threads,
+  activeThreadKey,
+  onSelectThread,
   messages,
   onSubmit,
-  onRun,
+  busy,
+  disabled,
 }: {
   open: boolean;
   onOpen: () => void;
   onClose: () => void;
+  title: string;
+  threads: { key: string; title: string; count: number; resolved: boolean }[];
+  activeThreadKey: string;
+  onSelectThread: (threadKey: string) => void;
   messages: ChatMsg[];
   onSubmit: (text: string) => void;
-  onRun: (actionType: string, label: string) => void;
+  busy: boolean;
+  disabled: boolean;
 }) {
   const [text, setText] = useState("");
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -788,7 +985,7 @@ function ChatPanel({
   function submit(e: React.FormEvent) {
     e.preventDefault();
     const t = text.trim();
-    if (!t) return;
+    if (!t || busy || disabled) return;
     onSubmit(t);
     setText("");
   }
@@ -803,10 +1000,10 @@ function ChatPanel({
             </div>
             <div>
               <Text fw={600} fz={14} lh={1.1}>
-                HausWatt agent
+                {title}
               </Text>
               <Text c="dimmed" fz={11}>
-                runs actions on your devices
+                HausWatt agent
               </Text>
             </div>
           </Group>
@@ -815,40 +1012,60 @@ function ChatPanel({
           </ActionIcon>
         </div>
 
-        <div className="chat-body" ref={bodyRef}>
-          {messages.map((m) => (
-            <div key={m.id} className={`bubble ${m.role}${m.status === "failed" ? " err" : ""}`}>
-              <div className="bubble-text">
-                {m.status === "failed" && <TriangleAlert size={13} style={{ verticalAlign: "-2px", marginRight: 4 }} />}
-                {m.text}
-              </div>
-              {m.savings && m.savings > 0 ? <div className="bubble-savings">~€{m.savings}/yr saved</div> : null}
-              {m.suggestions && m.suggestions.length > 0 && (
-                <div className="bubble-actions">
-                  {m.suggestions.map((s) => (
-                    <button key={s.type} type="button" className="bubble-action" onClick={() => onRun(s.type, s.label)}>
-                      <Zap size={12} /> {s.label}
-                    </button>
-                  ))}
+        <div className="chat-shell">
+          <div className="chat-main">
+            <div className="chat-body" ref={bodyRef}>
+              {messages.map((m) => (
+                <div key={m.id} className={`bubble ${m.role}${m.status === "failed" ? " err" : ""}`}>
+                  <div className="bubble-text">
+                    {m.status === "failed" && <TriangleAlert size={13} style={{ verticalAlign: "-2px", marginRight: 4 }} />}
+                    {m.text}
+                  </div>
+                  {m.savings && m.savings > 0 ? <div className="bubble-savings">~€{m.savings}/yr saved</div> : null}
+                </div>
+              ))}
+              {busy && (
+                <div className="bubble agent">
+                  <div className="bubble-text">Thinking...</div>
+                </div>
+              )}
+              {disabled && (
+                <div className="bubble agent">
+                  <div className="bubble-text">This recommendation is resolved. The thread is read-only.</div>
                 </div>
               )}
             </div>
-          ))}
-        </div>
 
-        <form className="chat-input" onSubmit={submit}>
-          <TextInput
-            value={text}
-            onChange={(e) => setText(e.currentTarget.value)}
-            placeholder="Ask the agent to run an action…"
-            size="sm"
-            radius="md"
-            style={{ flex: 1 }}
-          />
-          <ActionIcon type="submit" size={36} radius="md" color="energy" variant="filled" aria-label="Send">
-            <Send size={16} />
-          </ActionIcon>
-        </form>
+            <form className="chat-input" onSubmit={submit}>
+              <TextInput
+                value={text}
+                onChange={(e) => setText(e.currentTarget.value)}
+                placeholder={disabled ? "Resolved" : "Ask about this recommendation..."}
+                disabled={busy || disabled}
+                size="sm"
+                radius="md"
+                style={{ flex: 1 }}
+              />
+              <ActionIcon type="submit" size={36} radius="md" color="energy" variant="filled" aria-label="Send" loading={busy} disabled={disabled}>
+                <Send size={16} />
+              </ActionIcon>
+            </form>
+          </div>
+
+          <div className="chat-threads">
+            {threads.map((thread) => (
+              <button
+                key={thread.key}
+                type="button"
+                className={`chat-thread${thread.key === activeThreadKey ? " active" : ""}${thread.resolved ? " resolved" : ""}`}
+                onClick={() => onSelectThread(thread.key)}
+              >
+                <span>{thread.title}</span>
+                <small>{thread.resolved ? "done" : thread.count}</small>
+              </button>
+            ))}
+          </div>
+        </div>
       </aside>
 
       {!open && (

@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     phraser_backend: str = "template"
     claude_model: str = "claude-haiku-4-5"
     openai_model: str = "gpt-4o-mini"
+    chat_model: str = "gpt-4o-mini"
 
     # --- server ---
     host: str = "127.0.0.1"

@@ -12,20 +12,28 @@ import json
 import sqlite3
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from .. import actions  # noqa: F401 ensure builtin actions register
 from ..actions import builtin  # noqa: F401
 from ..actions.adapters import MockDeviceAdapter
 from ..actions.base import ActionError, all_actions, get_action
+from ..ai.chat_agent import ChatReply, ChatTurn, complete_chat
 from ..config import get_settings
-from ..db import connect, household_exists, household_ids, init_db
+from ..db import (
+    connect,
+    get_cached_advice,
+    household_exists,
+    household_ids,
+    init_db,
+    set_detected_insight_status,
+)
 from ..events.bus import Event, bus
 from ..ingest.mapping import reading_to_record, merge_into_record
 from ..models import DeviceReading, TelemetryRecord
-from ..db import get_cached_advice
 from .service import household_view, recompute_advice
 
 app = FastAPI(title="HausWatt")
@@ -54,6 +62,16 @@ def db() -> sqlite3.Connection:
 def _require_household(conn: sqlite3.Connection, household_id: str) -> None:
     if not household_exists(conn, household_id):
         raise HTTPException(status_code=404, detail=f"Unknown household {household_id}")
+
+
+class AdviceStatusUpdate(BaseModel):
+    status: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+    messages: list[ChatTurn] = Field(default_factory=list)
+    recommendation_fact_key: str | None = None
 
 
 # --- client API ------------------------------------------------------------
@@ -106,6 +124,58 @@ def advice(household_id: str, device_id: int | None = None, category: str | None
         # Unfiltered default view → top N across everything.
         items = items[:limit]
     return {"household_id": household_id, "advice": items}
+
+
+@app.patch("/api/advice/{household_id}/{fact_key}")
+async def update_advice_status(household_id: str, fact_key: str, payload: AdviceStatusUpdate):
+    if payload.status not in {"open", "resolved"}:
+        raise HTTPException(status_code=422, detail="status must be 'open' or 'resolved'")
+    conn = db()
+    try:
+        _require_household(conn, household_id)
+        updated = set_detected_insight_status(conn, household_id, fact_key, payload.status)
+    finally:
+        conn.close()
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Unknown recommendation {fact_key}")
+    await bus.publish(household_id, Event(type="advice_status", data=updated))
+    return updated
+
+
+@app.post("/api/chat/{household_id}", response_model=ChatReply)
+async def chat(household_id: str, payload: ChatRequest):
+    conn = db()
+    try:
+        _require_household(conn, household_id)
+        context = _chat_context(conn, household_id, payload.recommendation_fact_key)
+    finally:
+        conn.close()
+    return await complete_chat(payload.message, payload.messages, context)
+
+
+def _chat_context(
+    conn: sqlite3.Connection, household_id: str, recommendation_fact_key: str | None
+) -> dict:
+    view = household_view(conn, household_id)
+    advice_items = view["advice"] if view is not None else []
+    selected = next(
+        (item for item in advice_items if item["fact_key"] == recommendation_fact_key),
+        None,
+    )
+    available_actions = []
+    for action in all_actions():
+        try:
+            action.validate(conn, household_id, {})
+        except ActionError:
+            continue
+        available_actions.append({"type": action.type, "label": action.label})
+    return {
+        "household": view["household"] if view else {"household_id": household_id},
+        "hub": view["hub"] if view else None,
+        "selected_recommendation": selected,
+        "current_recommendations": [] if recommendation_fact_key else advice_items[:5],
+        "available_actions": available_actions,
+    }
 
 
 # --- ingest ----------------------------------------------------------------
@@ -197,6 +267,7 @@ def list_actions(household_id: str):
 @app.post("/api/actions/{action_type}")
 async def run_action(action_type: str, household_id: str, params: dict | None = None):
     params = params or {}
+    recommendation_fact_key = params.pop("recommendation_fact_key", None)
     action = get_action(action_type)
     if action is None:
         raise HTTPException(status_code=404, detail=f"Unknown action {action_type}")
@@ -218,6 +289,11 @@ async def run_action(action_type: str, household_id: str, params: dict | None = 
              effect.model_dump_json(), datetime.utcnow().isoformat(),
              datetime.utcnow().isoformat()),
         )
+        resolved = None
+        if recommendation_fact_key and effect.status == "executed":
+            resolved = set_detected_insight_status(
+                conn, household_id, recommendation_fact_key, "resolved"
+            )
         conn.commit()
     finally:
         conn.close()
@@ -225,6 +301,7 @@ async def run_action(action_type: str, household_id: str, params: dict | None = 
         "action_type": action_type, "label": action.label,
         "message": effect.message, "status": effect.status,
         "expected_savings_eur": effect.expected_savings_eur,
+        "resolved_fact_key": resolved["fact_key"] if resolved is not None else None,
     }))
     return effect.model_dump()
 

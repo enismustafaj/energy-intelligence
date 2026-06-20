@@ -10,6 +10,7 @@ not scope by it.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -145,6 +146,8 @@ CREATE TABLE IF NOT EXISTS insight_events (
     fact_json       TEXT,
     advice_json     TEXT,    -- structured advice + counterfactual breakdown
     phrased_text    TEXT,
+    status          TEXT DEFAULT 'open',   -- open | resolved
+    resolved_at     TEXT,
     origin          TEXT DEFAULT 'seed',   -- seed | detected
     created_at      TEXT
 );
@@ -201,7 +204,15 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _ensure_column(conn, "insight_events", "status", "TEXT DEFAULT 'open'")
+    _ensure_column(conn, "insight_events", "resolved_at", "TEXT")
     conn.commit()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 @contextmanager
@@ -269,10 +280,15 @@ def upsert_telemetry(conn: sqlite3.Connection, record) -> None:
     conn.commit()
 
 
-def upsert_detected_insight(conn: sqlite3.Connection, row: dict) -> None:
+def upsert_detected_insight(conn: sqlite3.Connection, row: dict) -> dict:
     """Insert/replace a detected insight (deduped on household_id+fact_key+period)."""
     from datetime import datetime, timezone
 
+    existing = conn.execute(
+        "SELECT status, resolved_at FROM insight_events WHERE origin='detected' "
+        "AND household_id=? AND fact_key=? AND period=?",
+        (row["household_id"], row["fact_key"], row["period"]),
+    ).fetchone()
     # Delete-then-insert keeps detection idempotent without relying on
     # partial-index ON CONFLICT semantics.
     conn.execute(
@@ -282,18 +298,21 @@ def upsert_detected_insight(conn: sqlite3.Connection, row: dict) -> None:
     )
     full = {
         "category": None, "device_id": None, "benefit_eur": None, "advice_json": None,
+        "status": existing["status"] if existing is not None and existing["status"] else "open",
+        "resolved_at": existing["resolved_at"] if existing is not None else None,
         **row, "created_at": datetime.now(timezone.utc).isoformat(),
     }
     conn.execute(
         "INSERT INTO insight_events (household_id,type,category,device_id,severity,period,"
         "title,detail,suggested_action,benefit_eur,fact_key,fact_json,advice_json,"
-        "phrased_text,origin,created_at) "
+        "phrased_text,status,resolved_at,origin,created_at) "
         "VALUES (:household_id,:type,:category,:device_id,:severity,:period,:title,:detail,"
         ":suggested_action,:benefit_eur,:fact_key,:fact_json,:advice_json,:phrased_text,"
-        ":origin,:created_at)",
+        ":status,:resolved_at,:origin,:created_at)",
         full,
     )
     conn.commit()
+    return {"status": full["status"], "resolved_at": full["resolved_at"]}
 
 
 def set_cached_advice(conn: sqlite3.Connection, household_id: str, payload_json: str) -> None:
@@ -315,6 +334,49 @@ def get_cached_advice(conn: sqlite3.Connection, household_id: str) -> str | None
         "SELECT payload_json FROM advice_cache WHERE household_id = ?", (household_id,)
     ).fetchone()
     return row["payload_json"] if row is not None else None
+
+
+def set_detected_insight_status(
+    conn: sqlite3.Connection, household_id: str, fact_key: str, status: str
+) -> dict | None:
+    """Update a detected insight's workflow status and keep the cached advice
+    payload in sync for fast UI refreshes."""
+    from datetime import datetime, timezone
+
+    rows = conn.execute(
+        "SELECT id FROM insight_events WHERE origin='detected' AND household_id=? AND fact_key=?",
+        (household_id, fact_key),
+    ).fetchall()
+    if not rows:
+        return None
+
+    resolved_at = datetime.now(timezone.utc).isoformat() if status == "resolved" else None
+    conn.executemany(
+        "UPDATE insight_events SET status=?, resolved_at=? WHERE id=?",
+        [(status, resolved_at, row["id"]) for row in rows],
+    )
+    _update_cached_advice_status(conn, household_id, fact_key, status)
+    conn.commit()
+    return {"fact_key": fact_key, "status": status, "resolved_at": resolved_at}
+
+
+def _update_cached_advice_status(
+    conn: sqlite3.Connection, household_id: str, fact_key: str, status: str
+) -> None:
+    cached = get_cached_advice(conn, household_id)
+    if cached is None:
+        return
+    items = json.loads(cached)
+    updated = []
+    for item in items:
+        if item.get("fact_key") == fact_key:
+            item = {**item, "status": status}
+        if item.get("status") != "resolved":
+            updated.append(item)
+    conn.execute(
+        "UPDATE advice_cache SET payload_json=? WHERE household_id=?",
+        (json.dumps(updated), household_id),
+    )
 
 
 def get_devices(conn: sqlite3.Connection, household_id: str) -> list[sqlite3.Row]:
