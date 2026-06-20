@@ -24,7 +24,6 @@ import "@mantine/core/styles.css";
 import {
   ArrowLeft,
   ArrowRight,
-  Bolt,
   Bot,
   Home,
   MessageSquare,
@@ -33,6 +32,7 @@ import {
   TrendingDown,
   TriangleAlert,
   X,
+  Zap,
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -152,17 +152,10 @@ function Topbar() {
       <Container size="lg" h="100%">
         <Group h="100%" justify="space-between">
           <Group gap={10} className="brand" onClick={() => navigate("/")} role="button">
-            <div className="logo-chip">
-              <Bolt size={18} />
-            </div>
-            <div>
-              <Text fw={600} fz={16} lh={1.2}>
-                HausWatt
-              </Text>
-              <Text c="dimmed" fz={12}>
-                Less cost. More loyalty. Zero disruption.
-              </Text>
-            </div>
+            <img src="/hauswatt-wordmark.svg" alt="HausWatt" className="logo-wordmark" />
+            <Text c="dimmed" fz={12} visibleFrom="sm">
+              Less cost. More loyalty. Zero disruption.
+            </Text>
           </Group>
         </Group>
       </Container>
@@ -604,7 +597,7 @@ function Dashboard({ householdId }: { householdId: string }) {
           />
         </SimpleGrid>
 
-        {availableSavings > 0 && (
+        {openAdvice.length > 0 && (
           <Paper withBorder radius="lg" p="md" className="cta-banner">
             <Group justify="space-between" align="center" wrap="nowrap" gap="md">
               <Group gap="sm" wrap="nowrap">
@@ -612,16 +605,29 @@ function Dashboard({ householdId }: { householdId: string }) {
                   <Zap size={20} />
                 </ThemeIcon>
                 <div>
-                  <Text fw={600} fz={15} lh={1.2}>
-                    Unlock €{formatEuro(availableSavings)}/yr more
-                  </Text>
-                  <Text c="dimmed" fz={13}>
-                    {savingAdvice.length} recommendation{savingAdvice.length === 1 ? "" : "s"} ready to apply
-                  </Text>
+                  {availableSavings > 0 ? (
+                    <>
+                      <Text fw={600} fz={15} lh={1.2}>
+                        Unlock €{formatEuro(availableSavings)}/yr more
+                      </Text>
+                      <Text c="dimmed" fz={13}>
+                        Across {savingAdvice.length} money-saving tip{savingAdvice.length === 1 ? "" : "s"} below
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text fw={600} fz={15} lh={1.2}>
+                        {openAdvice.length} recommendation{openAdvice.length === 1 ? "" : "s"} to review
+                      </Text>
+                      <Text c="dimmed" fz={13}>
+                        Things worth a look on your home
+                      </Text>
+                    </>
+                  )}
                 </div>
               </Group>
               <Button color="energy" radius="md" rightSection={<ArrowRight size={16} />} onClick={focusRecommendations} style={{ flexShrink: 0 }}>
-                Review &amp; apply
+                {availableSavings > 0 ? "Review & apply" : "Review"}
               </Button>
             </Group>
           </Paper>
@@ -693,7 +699,8 @@ function EnergyScene({
   const pv = byCat("pv");
   const hp = byCat("heat_pump");
   const ev = byCat("ev");
-  const extras = view.nodes.filter((n) => n.category === "battery" || n.category === "contract");
+  const battery = byCat("battery");
+  const extras = view.nodes.filter((n) => n.category === "contract");
 
   const selectNode = (node: EnergyNode) => {
     if (node.kind === "contract") onSelect({ type: "contract" });
@@ -713,10 +720,11 @@ function EnergyScene({
     <>
       <svg className="scene" viewBox="0 0 680 470" width="100%" role="img" aria-label="Isometric home scene with solar, heat pump and EV">
         <defs>
-          <path id="de-p-sun" d="M 578 70 Q 480 120 380 196" fill="none" />
+          <path id="de-p-sun" d="M 578 128 Q 480 160 380 196" fill="none" />
           <path id="de-p-roof" d="M 356 232 Q 350 260 340 288" fill="none" />
           <path id="de-p-hp" d="M 282 308 Q 258 304 234 296" fill="none" />
           <path id="de-p-ev" d="M 317 310 Q 358 296 397 326" fill="none" />
+          <path id="de-p-batt" d="M 278 360 Q 305 348 330 336" fill="none" />
         </defs>
 
         {ev && <polygon points="397,321 448,351 397,381 346,351" fill="#B4B2A9" opacity=".35" />}
@@ -725,18 +733,18 @@ function EnergyScene({
         {pv && (
           <>
             <g className="de-tw">
-              <circle cx="578" cy="60" r="18" fill="#EF9F27" />
-              <circle cx="578" cy="60" r="11" fill="#FAC775" />
+              <circle cx="578" cy="115" r="18" fill="#EF9F27" />
+              <circle cx="578" cy="115" r="11" fill="#FAC775" />
             </g>
             <g stroke="#EF9F27" strokeWidth="1.5" strokeLinecap="round" className="de-ray" fill="none">
-              <line x1="578" y1="28" x2="578" y2="20" />
-              <line x1="610" y1="60" x2="618" y2="60" />
-              <line x1="601" y1="37" x2="606" y2="32" />
-              <line x1="601" y1="83" x2="606" y2="88" />
-              <line x1="555" y1="37" x2="550" y2="32" />
-              <line x1="555" y1="83" x2="550" y2="88" />
-              <line x1="546" y1="60" x2="538" y2="60" />
-              <line x1="578" y1="92" x2="578" y2="100" />
+              <line x1="578" y1="83" x2="578" y2="75" />
+              <line x1="610" y1="115" x2="618" y2="115" />
+              <line x1="601" y1="92" x2="606" y2="87" />
+              <line x1="601" y1="138" x2="606" y2="143" />
+              <line x1="555" y1="92" x2="550" y2="87" />
+              <line x1="555" y1="138" x2="550" y2="143" />
+              <line x1="546" y1="115" x2="538" y2="115" />
+              <line x1="578" y1="147" x2="578" y2="155" />
             </g>
           </>
         )}
@@ -810,6 +818,23 @@ function EnergyScene({
           </g>
         )}
 
+        {battery && (
+          // Battery: upright cylinder with a label band, bolt, and polarity mark.
+          <g className={devClass(battery)} opacity={dim(battery)} onClick={() => selectNode(battery)} role="button" tabIndex={0}>
+            {/* cylinder body */}
+            <rect x="254" y="352" width="24" height="40" fill="#A9CC73" />
+            <rect x="272" y="352" width="6" height="40" fill="#8FB855" opacity=".55" />
+            <ellipse cx="266" cy="392" rx="12" ry="4.5" fill="#8FB855" stroke="#5C7A2E" strokeWidth=".6" />
+            <ellipse cx="266" cy="352" rx="12" ry="4.5" fill="#CFE3AE" stroke="#5C7A2E" strokeWidth=".6" />
+            <rect x="254" y="352" width="24" height="40" fill="none" stroke="#5C7A2E" strokeWidth=".6" />
+            {/* label band + bolt + polarity */}
+            <rect x="254" y="366" width="24" height="12" fill="#5C9E2E" />
+            <path d="M 268 367 L 262 375 L 266 375 L 263 381 L 271 372 L 267 372 Z" fill="#EFB60A" stroke="#9C7805" strokeWidth=".25" />
+            <line x1="257" y1="361" x2="261" y2="361" stroke="#3a5a18" strokeWidth="1" />
+            <line x1="259" y1="359" x2="259" y2="363" stroke="#3a5a18" strokeWidth="1" />
+          </g>
+        )}
+
         {pv &&
           [0, 0.4, 0.8, 1.2, 1.6].map((b, i) => (
             <circle key={`s${i}`} r={i % 2 ? 2 : 2.5} fill="#BA7517" opacity={i % 2 ? 0.8 : 1}>
@@ -842,15 +867,23 @@ function EnergyScene({
               </animateMotion>
             </circle>
           ))}
+        {battery &&
+          [0, 0.7, 1.4].map((b, i) => (
+            <circle key={`b${i}`} r={i === 1 ? 1.5 : 1.7} fill="#5C9E2E" opacity={i === 1 ? 0.8 : 1}>
+              <animateMotion dur="2s" repeatCount="indefinite" begin={`${b}s`}>
+                <mpath href="#de-p-batt" />
+              </animateMotion>
+            </circle>
+          ))}
 
-        <g style={{ fontFamily: MONO, fontSize: 11 }}>
+        <g style={{ fontFamily: MONO, fontSize: 9 }}>
           {pv && (
             <>
-              <line x1="378" y1="180" x2="430" y2="155" stroke="#cfcabf" strokeWidth=".5" />
-              <text x="435" y="158" style={{ fill: "#185FA5", fontWeight: 600 }}>
+              <line x1="332" y1="218" x2="170" y2="180" stroke="#cfcabf" strokeWidth=".5" />
+              <text x="166" y="176" textAnchor="end" style={{ fill: "#185FA5", fontWeight: 600 }}>
                 {pv.label}
               </text>
-              <text x="435" y="172" style={{ fill: "#8a857c" }}>
+              <text x="166" y="190" textAnchor="end" style={{ fill: "#8a857c" }}>
                 {pv.metric}
               </text>
             </>
@@ -877,14 +910,20 @@ function EnergyScene({
               </text>
             </>
           )}
+          {battery && (
+            <>
+              <line x1="254" y1="376" x2="150" y2="392" stroke="#cfcabf" strokeWidth=".5" />
+              <text x="146" y="390" textAnchor="end" style={{ fill: "#4E7A1E", fontWeight: 600 }}>
+                {battery.label}
+              </text>
+              <text x="146" y="404" textAnchor="end" style={{ fill: "#8a857c" }}>
+                {battery.metric}
+              </text>
+            </>
+          )}
           <text x="340" y="392" textAnchor="middle" style={{ fill: "#3a3a37", fontWeight: 600 }}>
             Home
           </text>
-          {view.hub && (
-            <text x="340" y="406" textAnchor="middle" style={{ fill: "#8a857c" }}>
-              €{formatEuro(view.hub.annual_cost_eur)}/yr
-            </text>
-          )}
         </g>
       </svg>
 

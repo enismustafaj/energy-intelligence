@@ -17,15 +17,10 @@ body {
 
 .brand { cursor: pointer; user-select: none; }
 
-.logo-chip {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  background: #26215c;
-  color: #cecbf6;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.logo-wordmark {
+  height: 30px;
+  width: auto;
+  display: block;
 }
 
 /* live status pill */

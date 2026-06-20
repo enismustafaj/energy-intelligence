@@ -52,16 +52,43 @@ AGENT_ACTIONABLE_KEYS = {
 }
 
 
+# Typical EV efficiency, kWh per km (~18 kWh/100 km), for translating battery
+# capacity into a range a person can picture.
+_EV_KWH_PER_KM = 0.18
+
+
 def _node_metric(category: str, dev: sqlite3.Row | None, sq) -> str:
-    """A one-line headline metric for a device node."""
+    """A plain-language, one-line takeaway for a device node.
+
+    The point is what the device *does for the household*, not its spec sheet —
+    no kWp / SCOP / kWh jargon. Every figure is grounded in the home's own data.
+    """
     if category == "pv":
-        return f"{(dev['rated_kw'] or 0):.1f} kWp · {sq.pv_production_kwh:.0f} kWh/yr"
+        # Share of the home's electricity met by its own solar (vs. the grid).
+        if sq and sq.consumption_kwh:
+            self_suff = max(0, (sq.consumption_kwh - sq.grid_import_kwh) / sq.consumption_kwh)
+            return f"Covers ~{self_suff * 100:.0f}% of your power"
+        return "Generates your own power"
     if category == "battery":
-        return f"{(dev['capacity_kwh'] or 0):.0f} kWh"
+        # Roughly how long the stored energy could run the home at typical load.
+        cap = dev["capacity_kwh"] or 0
+        avg_load_kw = (sq.consumption_kwh / 8760) if sq and sq.consumption_kwh else 0
+        if cap and avg_load_kw:
+            hours = cap / avg_load_kw
+            return f"Backs up ~{hours:.0f} hours of your home"
+        return "Stores solar for later"
     if category == "heat_pump":
-        return f"SCOP {(dev['efficiency'] or 0):.1f}"
+        # SCOP expressed as a multiplier anyone can grasp.
+        scop = dev["efficiency"] or 0
+        if scop:
+            return f"~{scop:.0f}× the heat per € of power"
+        return "Efficient electric heating"
     if category == "ev":
-        return f"{(dev['capacity_kwh'] or 0):.0f} kWh · {(dev['rated_kw'] or 0):.0f} kW"
+        cap = dev["capacity_kwh"] or 0
+        if cap:
+            km = round(cap / _EV_KWH_PER_KM / 10) * 10  # nearest 10 km
+            return f"~{km:.0f} km on a full charge"
+        return "Charges at home"
     return ""
 
 
@@ -85,10 +112,12 @@ def household_view(conn: sqlite3.Connection, household_id: str) -> dict | None:
             "metric": _node_metric(d["category"], d, sq) if sq else "",
         })
     if contract is not None:
+        model = (contract["pricing_model"] or "").lower()
+        tariff_desc = "Price changes through the day" if "dynamic" in model else "One fixed price"
         nodes.append({
             "kind": "contract", "device_id": None, "category": "contract",
             "icon": NODE_META["contract"]["icon"], "label": NODE_META["contract"]["label"],
-            "metric": f"{contract['tariff_id']} · €{contract['base_fee_eur_per_month']:.0f}/mo",
+            "metric": tariff_desc,
         })
 
     # Advice is precomputed off the request path (see recompute_advice, called on
@@ -100,6 +129,13 @@ def household_view(conn: sqlite3.Connection, household_id: str) -> dict | None:
     # Advice the household has already acted on, and the annual benefit realized.
     applied = [dict(r) for r in get_applied_advice(conn, household_id)]
     realized_savings = round(get_realized_savings(conn, household_id))
+
+    # Keep the two sets disjoint: an applied recommendation is no longer "open",
+    # so drop it from the live advice list. This is the single source of truth —
+    # `advice` = still-open, `applied_advice` = already realized, no overlap — so
+    # every count the UI derives (open list, available savings, realized) agrees.
+    applied_keys = {a["fact_key"] for a in applied}
+    advice = [a for a in advice if a["fact_key"] not in applied_keys]
 
     return {
         "household": dict(h),

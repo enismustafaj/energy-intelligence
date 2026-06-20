@@ -35,10 +35,21 @@ def test_household_view_api_returns_client_payload(db_path):
     assert all("agent_actionable" in item for item in data["advice"])
     assert any(item["agent_actionable"] for item in data["advice"])
     assert any(not item["agent_actionable"] for item in data["advice"])
+    # agent_actionable is true only for direct device controls; assert the mapping
+    # for whichever of these actions are present in the open advice (applied advice
+    # is filtered out of the live list, so not every action is guaranteed to show).
     by_action = {item["action_type"]: item["agent_actionable"] for item in data["advice"]}
-    assert by_action["shift_heatpump_to_cheap_window"] is True
-    assert by_action["book_maintenance"] is False
-    assert by_action["suggest_tariff_switch"] is False
+    expected_actionable = {
+        "shift_heatpump_to_cheap_window": True,
+        "book_maintenance": False,
+        "suggest_tariff_switch": False,
+    }
+    for action_type, expected in expected_actionable.items():
+        if action_type in by_action:
+            assert by_action[action_type] is expected
+    # Applied advice never appears in the open list.
+    applied_keys = {a["fact_key"] for a in data["applied_advice"]}
+    assert all(item["fact_key"] not in applied_keys for item in data["advice"])
     # Realized savings from applied-advice history are part of the payload.
     assert data["realized_savings_eur"] > 0
     assert data["applied_advice"]
@@ -67,18 +78,21 @@ def test_completed_action_resolves_recommendation_in_view(db_path):
 def test_resolve_api_resolves_manual_recommendation_in_view(db_path):
     client = TestClient(app)
 
-    before = client.get("/api/households/HH-1001/view")
+    # Uses HH-1002 (which has several manual recommendations) to avoid contending
+    # with test_completed_action_resolves_recommendation_in_view over HH-1001's
+    # advice — the seeded DB is shared across the session.
+    before = client.get("/api/households/HH-1002/view")
     assert before.status_code == 200
     item = next(entry for entry in before.json()["advice"] if not entry["agent_actionable"])
 
     response = client.patch(
-        f"/api/advice/HH-1001/{item['fact_key']}",
+        f"/api/advice/HH-1002/{item['fact_key']}",
         json={"status": "resolved"},
     )
     assert response.status_code == 200
     assert response.json()["status"] == "resolved"
 
-    after = client.get("/api/households/HH-1001/view")
+    after = client.get("/api/households/HH-1002/view")
     assert after.status_code == 200
     assert all(entry["fact_key"] != item["fact_key"] for entry in after.json()["advice"])
 
