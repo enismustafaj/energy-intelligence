@@ -1,5 +1,3 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
 import {
   ActionIcon,
   Alert,
@@ -22,6 +20,7 @@ import {
   ThemeIcon,
   Title,
 } from "@mantine/core";
+import "@mantine/core/styles.css";
 import {
   ArrowLeft,
   ArrowRight,
@@ -31,17 +30,16 @@ import {
   MessageSquare,
   RotateCcw,
   Send,
-  ShieldCheck,
-  Sparkles,
   TrendingDown,
   TriangleAlert,
   X,
   Zap,
 } from "lucide-react";
-import { API_BASE_URL, getAdvice, getHouseholdView, listHouseholds, runAction } from "./api";
-import type { ActionEvent, Advice, EnergyNode, Household, HouseholdView } from "./types";
-import "@mantine/core/styles.css";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { API_BASE_URL, getHouseholdView, listHouseholds, runAction } from "./api";
 import "./styles.css";
+import type { ActionEvent, Advice, EnergyNode, Household, HouseholdView } from "./types";
 
 const theme = createTheme({
   primaryColor: "energy",
@@ -83,6 +81,12 @@ function navigate(path: string): void {
 function formatEuro(value: number | null | undefined): string {
   if (value == null) return "";
   return new Intl.NumberFormat("en", { maximumFractionDigits: 0 }).format(value);
+}
+
+// Sentence-case a label: first letter upper, rest as-is, underscores to spaces.
+function titleize(value: string): string {
+  const text = value.replace(/_/g, " ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function msgId(): string {
@@ -138,7 +142,7 @@ function Topbar() {
             </div>
             <div>
               <Text fw={600} fz={16} lh={1.2}>
-                Dark Energy
+                HausWatt
               </Text>
               <Text c="dimmed" fz={12}>
                 Less cost. More loyalty. Zero disruption.
@@ -248,13 +252,12 @@ function Stat({ label, value, sub, subColor }: { label: string; value: React.Rea
 function Dashboard({ householdId }: { householdId: string }) {
   const [view, setView] = useState<HouseholdView | null>(null);
   const [selection, setSelection] = useState<ActiveSelection>({ type: "all" });
-  const [advice, setAdvice] = useState<Advice[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>(() => [
     {
       id: "greet",
       role: "agent",
-      text: "Hi — I'm your Dark Energy agent. I can run actions on your devices. Tap an action, or ask me to run one.",
+      text: "Hi — I'm your HausWatt agent. I can run actions on your devices. Tap an action, or ask me to run one.",
     },
   ]);
   const [loading, setLoading] = useState(true);
@@ -268,7 +271,6 @@ function Dashboard({ householdId }: { householdId: string }) {
       .then((data) => {
         if (!cancelled) {
           setView(data);
-          setAdvice(data.advice);
           setSelection({ type: "all" });
         }
       })
@@ -283,26 +285,14 @@ function Dashboard({ householdId }: { householdId: string }) {
     };
   }, [householdId]);
 
-  useEffect(() => {
-    if (!view) return;
-    let cancelled = false;
-    const filter =
-      selection.type === "contract"
-        ? { category: "contract" }
-        : selection.type === "device"
-          ? { deviceId: selection.deviceId }
-          : {};
-    getAdvice(householdId, filter)
-      .then((items) => {
-        if (!cancelled) setAdvice(items);
-      })
-      .catch(() => {
-        if (!cancelled) setAdvice([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [householdId, selection, view]);
+  // All advice arrives with the household view in one call; filter it in-memory
+  // as the selection changes instead of re-fetching from the backend.
+  const advice = useMemo<Advice[]>(() => {
+    const all = view?.advice ?? [];
+    if (selection.type === "contract") return all.filter((a) => a.category === "contract");
+    if (selection.type === "device") return all.filter((a) => a.device_id === selection.deviceId);
+    return all.slice(0, 5); // unfiltered default: top N across everything
+  }, [view, selection]);
 
   // live action results stream back here and land in the chat as the agent's reply
   useEffect(() => {
@@ -390,7 +380,6 @@ function Dashboard({ householdId }: { householdId: string }) {
 
   const hub = view.hub;
   const potentialSavings = view.advice.reduce((sum, a) => sum + (a.benefit_eur ?? 0), 0);
-  const issues = view.advice.filter((a) => a.category === "fault").length;
 
   const featured = advice[0] ?? null;
   const rest = advice.slice(1);
@@ -412,17 +401,19 @@ function Dashboard({ householdId }: { householdId: string }) {
               </Text>
             </div>
           </Group>
-          <div className="live-pill">
-            <span className="de-live" aria-hidden="true" /> live
-          </div>
         </Group>
 
         <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
           <Stat label="Annual cost" value={`€${formatEuro(hub?.annual_cost_eur)}`} sub="this year" />
           <Stat
-            label="PV self-consumption"
-            value={hub?.pv_self_consumption_pct != null ? `${Math.round(hub.pv_self_consumption_pct)}%` : "—"}
-            sub="solar used on-site"
+            label="Monthly cost"
+            value={`€${formatEuro(hub?.month_to_date_cost_eur)}`}
+            sub="so far this month"
+          />
+          <Stat
+            label="Est. end of month"
+            value={`€${formatEuro(hub?.month_estimated_cost_eur)}`}
+            sub="projected total"
           />
           <Stat
             label="Potential savings"
@@ -434,31 +425,15 @@ function Dashboard({ householdId }: { householdId: string }) {
             }
             subColor={potentialSavings > 0 ? "energy.7" : "dimmed"}
           />
-          <Stat
-            label="Issues"
-            value={<span style={{ color: issues ? "var(--mantine-color-red-7)" : undefined }}>{issues}</span>}
-            sub={issues ? "need attention" : "all clear"}
-            subColor={issues ? "red.7" : "dimmed"}
-          />
         </SimpleGrid>
 
         <Paper withBorder radius="lg" p="md" className="flow-card">
-          <Group justify="space-between" mb={2}>
-            <Text fz={13} c="dimmed">
-              Live energy flow
-            </Text>
-            <Text fz={12} c="dimmed">
-              now · {new Date().toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit", hour12: false })}
-            </Text>
-          </Group>
           <EnergyScene view={view} selection={selection} onSelect={setSelection} />
         </Paper>
 
-        {featured && <InsightCard advice={featured} onAction={handleAction} />}
-
         <Group justify="space-between" align="center" mt={4}>
           <Text fz={15} fw={600}>
-            {selection.type === "all" ? "Recommendations" : `${selectionLabel} · recommendations`}
+            {selection.type === "all" ? "Recommendations" : `${titleize(selectionLabel)} · Recommendations`}
           </Text>
           {selection.type !== "all" && (
             <Button variant="default" size="compact-sm" leftSection={<RotateCcw size={14} />} onClick={() => setSelection({ type: "all" })}>
@@ -556,8 +531,8 @@ function EnergyScene({
           <polygon points="416,244 378,178 302,222 340,288" fill="#D85A30" stroke="#993C1D" strokeWidth=".5" />
           <line x1="378" y1="178" x2="302" y2="222" stroke="#993C1D" strokeWidth="1" />
           <line x1="416" y1="244" x2="340" y2="288" stroke="#993C1D" strokeWidth=".5" opacity=".55" />
-          <polygon points="264,244 302,222 340,288" fill="#F5C4B3" stroke="#993C1D" strokeWidth=".5" />
-          <line x1="302" y1="222" x2="302" y2="266" stroke="#993C1D" strokeWidth=".4" opacity=".4" />
+          <polygon points="264,244 302,222 340,288" fill="#D85A30" stroke="#993C1D" strokeWidth=".5" />
+          <line x1="264" y1="244" x2="302" y2="222" stroke="#993C1D" strokeWidth="1" />
           <polygon points="416,310 340,354 340,288 416,244" fill="#D3D1C7" stroke="#888780" strokeWidth=".5" />
           <polygon points="264,310 340,354 340,288 264,244" fill="#F1EFE8" stroke="#888780" strokeWidth=".5" />
           <polygon points="302,292 315,300 315,340 302,332" fill="#993C1D" stroke="#712B13" strokeWidth=".5" />
@@ -609,10 +584,10 @@ function EnergyScene({
             <polygon points="412,314 433,327 401,345 380,333" fill="#9FE1CB" stroke="#085041" strokeWidth=".5" />
             <polygon points="384,338 398,346 398,343 384,335" fill="#444441" stroke="#085041" strokeWidth=".3" />
             <polygon points="428,331 408,343 408,340 428,328" fill="#444441" stroke="#085041" strokeWidth=".3" />
-            <ellipse cx="382" cy="362" rx="5" ry="2.5" fill="#2C2C2A" />
-            <ellipse cx="382" cy="362" rx="2.2" ry="1.1" fill="#888780" />
-            <ellipse cx="402" cy="370" rx="5" ry="2.5" fill="#2C2C2A" />
-            <ellipse cx="402" cy="370" rx="2.2" ry="1.1" fill="#888780" />
+            <ellipse cx="380" cy="355" rx="1.6" ry="2.6" fill="#FCE9A6" stroke="#C9A23B" strokeWidth=".4" transform="rotate(-31 380 355)" />
+            <ellipse cx="390" cy="361" rx="1.6" ry="2.6" fill="#FCE9A6" stroke="#C9A23B" strokeWidth=".4" transform="rotate(-31 390 361)" />
+            <ellipse cx="402" cy="370" rx="2.5" ry="4.5" fill="#2C2C2A" />
+            <ellipse cx="402" cy="370" rx="1.1" ry="2" fill="#888780" />
             <ellipse cx="442" cy="345" rx="2.5" ry="4.5" fill="#2C2C2A" />
             <ellipse cx="442" cy="345" rx="1.1" ry="2" fill="#888780" />
             <path d="M 317 308 Q 350 296 397 326" stroke="#2C2C2A" strokeWidth="1.6" fill="none" strokeLinecap="round" />
@@ -722,44 +697,6 @@ function EnergyScene({
   );
 }
 
-function InsightCard({ advice, onAction }: { advice: Advice; onAction: (actionType: string, label: string) => void }) {
-  return (
-    <Paper withBorder radius="lg" p="lg" className="insight-card">
-      <Group justify="space-between" mb={10} wrap="nowrap">
-        <Group gap={9} wrap="nowrap">
-          <div className="insight-chip">
-            <Sparkles size={18} />
-          </div>
-          <Text fz={15} fw={600}>
-            Dark Energy insight
-          </Text>
-        </Group>
-        <span className="grounded-pill">
-          <ShieldCheck size={13} /> grounded in your data
-        </span>
-      </Group>
-      <Text fz={15} fw={600} mb={4}>
-        {advice.title}
-      </Text>
-      <Text fz={15} lh={1.6} mb={12} c="dark.6">
-        {advice.body}
-      </Text>
-      <Group gap="xs" wrap="wrap">
-        {advice.action_type && (
-          <Button size="sm" color="energy" leftSection={<Zap size={15} />} onClick={() => onAction(advice.action_type as string, advice.action_label || "Take action")}>
-            {advice.action_label || "Take action"}
-          </Button>
-        )}
-        {advice.benefit_eur ? (
-          <Badge size="lg" variant="light" color="energy" radius="sm">
-            saves €{advice.benefit_eur}/yr
-          </Badge>
-        ) : null}
-      </Group>
-    </Paper>
-  );
-}
-
 function AdviceList({
   advice,
   onAction,
@@ -781,7 +718,7 @@ function AdviceList({
         <Card key={item.fact_key} withBorder radius="md" padding="md" style={{ borderLeft: `3px solid ${accentVar(item)}` }}>
           <Group gap="xs" mb={6} wrap="wrap">
             <Badge size="xs" variant="light" color={CATEGORY_COLOR[item.category] ?? "gray"} radius="sm">
-              {item.category.replace("_", " ")}
+              {titleize(item.category)}
             </Badge>
             {item.benefit_eur ? (
               <Badge size="xs" variant="filled" color="energy" radius="sm">
@@ -866,7 +803,7 @@ function ChatPanel({
             </div>
             <div>
               <Text fw={600} fz={14} lh={1.1}>
-                Dark Energy agent
+                HausWatt agent
               </Text>
               <Text c="dimmed" fz={11}>
                 runs actions on your devices

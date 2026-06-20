@@ -1,4 +1,4 @@
-"""``darkenergy`` command-line entrypoint: seed | serve | sim."""
+"""``hauswatt`` command-line entrypoint: seed | serve | sim."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # Watch the backend package so Python edits trigger a reload.
     pkg_dir = str(Path(__file__).resolve().parent)
     uvicorn.run(
-        "darkenergy.web.app:app",
+        "hauswatt.web.app:app",
         host=args.host or settings.host,
         port=args.port or settings.port,
         reload=reload,
@@ -54,7 +54,7 @@ def _cmd_sim(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="darkenergy", description="Dark Energy CLI")
+    p = argparse.ArgumentParser(prog="hauswatt", description="HausWatt CLI")
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("seed", help="Load the dataset into SQLite")

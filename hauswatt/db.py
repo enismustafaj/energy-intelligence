@@ -176,6 +176,15 @@ CREATE TABLE IF NOT EXISTS actions (
     executed_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_actions_hh ON actions(household_id, created_at);
+
+-- Precomputed dashboard advice, one row per household. Written off the request
+-- path (on ingest / recompute) so GET /view is a pure read with no rule-engine
+-- work. `payload_json` holds the exact ranked advice list the API returns.
+CREATE TABLE IF NOT EXISTS advice_cache (
+    household_id    TEXT PRIMARY KEY,
+    payload_json    TEXT NOT NULL,
+    computed_at     TEXT
+);
 """
 
 
@@ -285,6 +294,27 @@ def upsert_detected_insight(conn: sqlite3.Connection, row: dict) -> None:
         full,
     )
     conn.commit()
+
+
+def set_cached_advice(conn: sqlite3.Connection, household_id: str, payload_json: str) -> None:
+    """Store the precomputed advice payload for a household (one row per tenant)."""
+    from datetime import datetime, timezone
+
+    conn.execute(
+        "INSERT OR REPLACE INTO advice_cache (household_id, payload_json, computed_at) "
+        "VALUES (?, ?, ?)",
+        (household_id, payload_json, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+
+def get_cached_advice(conn: sqlite3.Connection, household_id: str) -> str | None:
+    """Return the stored advice payload JSON for a household, or None if not yet
+    computed (caller falls back to computing on demand)."""
+    row = conn.execute(
+        "SELECT payload_json FROM advice_cache WHERE household_id = ?", (household_id,)
+    ).fetchone()
+    return row["payload_json"] if row is not None else None
 
 
 def get_devices(conn: sqlite3.Connection, household_id: str) -> list[sqlite3.Row]:

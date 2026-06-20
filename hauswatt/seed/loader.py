@@ -280,6 +280,15 @@ def seed(dataset_dir: Path | None = None, db_path: Path | None = None) -> dict[s
             with transaction(conn):
                 total_tel += _seed_telemetry(conn, h, dataset_dir)
         counts["telemetry"] = total_tel
+
+        # Warm the advice cache so the first GET /view per household is a pure
+        # read (no rule engine on the request path).
+        from ..web.service import recompute_advice
+        warmed = 0
+        for h in households:
+            recompute_advice(conn, h["household_id"])
+            warmed += 1
+        counts["advice_cache"] = warmed
     finally:
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.close()

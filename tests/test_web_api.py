@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from darkenergy.web.app import app
+from hauswatt.web.app import app
 
 
 def test_households_api_returns_seeded_homes(db_path):

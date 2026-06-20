@@ -18,7 +18,14 @@ from ..ai.phraser import get_phraser
 from ..ai.template_phraser import ACTION_LABELS
 from ..analytics import facts as facts_mod
 from ..analytics import status as status_mod
-from ..db import get_contract, get_devices, get_household, upsert_detected_insight
+from ..db import (
+    get_cached_advice,
+    get_contract,
+    get_devices,
+    get_household,
+    set_cached_advice,
+    upsert_detected_insight,
+)
 
 # Display metadata per device category for the star nodes. The 'household'
 # device is the hub itself, not a point on the star, so it has no entry here.
@@ -70,7 +77,11 @@ def household_view(conn: sqlite3.Connection, household_id: str) -> dict | None:
             "metric": f"{contract['tariff_id']} · €{contract['base_fee_eur_per_month']:.0f}/mo",
         })
 
-    advice = _ranked_advice(conn, household_id)
+    # Advice is precomputed off the request path (see recompute_advice, called on
+    # ingest). Read the cached payload so GET /view does no rule-engine work. Only
+    # if it has never been computed for this tenant do we compute once, lazily.
+    cached = get_cached_advice(conn, household_id)
+    advice = json.loads(cached) if cached is not None else recompute_advice(conn, household_id)
 
     return {
         "household": dict(h),
@@ -78,6 +89,14 @@ def household_view(conn: sqlite3.Connection, household_id: str) -> dict | None:
         "nodes": nodes,
         "advice": advice,
     }
+
+
+def recompute_advice(conn: sqlite3.Connection, household_id: str) -> list[dict]:
+    """Run the engine, phrase + persist results, and cache the ranked advice
+    payload for fast reads. Call this off the request path (on ingest)."""
+    advice = _ranked_advice(conn, household_id)
+    set_cached_advice(conn, household_id, json.dumps(advice))
+    return advice
 
 
 def _ranked_advice(conn: sqlite3.Connection, household_id: str) -> list[dict]:

@@ -1,4 +1,4 @@
-import type { Advice, Household, HouseholdView } from "./types";
+import type { Household, HouseholdView } from "./types";
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -21,18 +21,6 @@ export async function listHouseholds(): Promise<Household[]> {
 
 export function getHouseholdView(householdId: string): Promise<HouseholdView> {
   return getJson<HouseholdView>(`/api/households/${householdId}/view`);
-}
-
-export async function getAdvice(
-  householdId: string,
-  filter: { deviceId?: number; category?: string } = {},
-): Promise<Advice[]> {
-  const params = new URLSearchParams();
-  if (filter.deviceId !== undefined) params.set("device_id", String(filter.deviceId));
-  if (filter.category !== undefined) params.set("category", filter.category);
-  const suffix = params.size ? `?${params.toString()}` : "";
-  const data = await getJson<{ advice: Advice[] }>(`/api/advice/${householdId}${suffix}`);
-  return data.advice;
 }
 
 export async function runAction(householdId: string, actionType: string): Promise<void> {

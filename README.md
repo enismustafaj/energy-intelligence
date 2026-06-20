@@ -1,9 +1,9 @@
-# Dark Energy
+# HausWatt
 
 A customer **intelligence layer** over residential energy telemetry.
 *Less cost. More loyalty. Zero disruption.*
 
-Dark Energy turns per-device energy data (PV, battery, heat pump, EV, household
+HausWatt turns per-device energy data (PV, battery, heat pump, EV, household
 load) into **forecasts, anomaly detection, and AI-phrased, actionable advice**,
 served through an API for a separate per-household dashboard with live updates.
 
@@ -16,11 +16,11 @@ control actions, an API backend, and a separate React dashboard using SSE.
 
 | Capability | Where |
 |---|---|
-| Real-time streaming for devices | `darkenergy/ingest/` + `darkenergy/simulators/` |
-| ETL over energy usage & production | `darkenergy/analytics/metrics.py` |
-| Bill forecasting & anomaly detection | `darkenergy/analytics/{forecast,anomalies}.py` |
-| AI layer: insights → user-friendly feedback + actions | `darkenergy/ai/` |
-| Per-household dashboard (insights, forecast, actions) | `frontend/` + `darkenergy/web/` API |
+| Real-time streaming for devices | `hauswatt/ingest/` + `hauswatt/simulators/` |
+| ETL over energy usage & production | `hauswatt/analytics/metrics.py` |
+| Bill forecasting & anomaly detection | `hauswatt/analytics/{forecast,anomalies}.py` |
+| AI layer: insights → user-friendly feedback + actions | `hauswatt/ai/` |
+| Per-household dashboard (insights, forecast, actions) | `frontend/` + `hauswatt/web/` API |
 
 ### Design principles
 - **One unified telemetry schema** (`models.TelemetryRecord`) is written by both
@@ -46,8 +46,8 @@ python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"        # add ".[claude]" / ".[openai]" for LLM phrasing
 (cd frontend && npm install)
 
-.venv/bin/darkenergy seed                 # load the dataset into data.db (~140k rows)
-.venv/bin/darkenergy serve                # FastAPI API backend on :8000
+.venv/bin/hauswatt seed                 # load the dataset into data.db (~140k rows)
+.venv/bin/hauswatt serve                # FastAPI API backend on :8000
 (cd frontend && npm run dev)              # React frontend on :5173
 ```
 
@@ -55,7 +55,7 @@ Open <http://localhost:5173> and pick a household. In another terminal, stream
 live device data into it:
 
 ```bash
-.venv/bin/darkenergy sim --household HH-1001 --devices all --speed 60 --clock rebase
+.venv/bin/hauswatt sim --household HH-1001 --devices all --speed 60 --clock rebase
 ```
 
 The status card ticks via SSE; the insights feed shows the heat-pump anomaly,
@@ -84,8 +84,8 @@ Default is a deterministic template phraser (no API key). To have an LLM phrase
 the insights instead:
 
 ```bash
-DARKENERGY_PHRASER_BACKEND=claude  ANTHROPIC_API_KEY=...  .venv/bin/darkenergy serve
-DARKENERGY_PHRASER_BACKEND=openai  OPENAI_API_KEY=...      .venv/bin/darkenergy serve
+DARKENERGY_PHRASER_BACKEND=claude  ANTHROPIC_API_KEY=...  .venv/bin/hauswatt serve
+DARKENERGY_PHRASER_BACKEND=openai  OPENAI_API_KEY=...      .venv/bin/hauswatt serve
 ```
 
 Both go through the same `Phraser` protocol and the same number-grounding
@@ -105,5 +105,5 @@ energy-balance invariant, and the phraser never surfaces an ungrounded number.
 ## Configuration
 
 All settings are environment variables prefixed `DARKENERGY_` (see
-`darkenergy/config.py`): `DB_PATH`, `DATASET_DIR`, `PHRASER_BACKEND`,
+`hauswatt/config.py`): `DB_PATH`, `DATASET_DIR`, `PHRASER_BACKEND`,
 `CLAUDE_MODEL`, `OPENAI_MODEL`, `HOST`, `PORT`, `BALANCE_EPSILON_KW`.

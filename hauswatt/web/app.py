@@ -25,9 +25,10 @@ from ..db import connect, household_exists, household_ids, init_db
 from ..events.bus import Event, bus
 from ..ingest.mapping import reading_to_record, merge_into_record
 from ..models import DeviceReading, TelemetryRecord
-from .service import household_view, _ranked_advice
+from ..db import get_cached_advice
+from .service import household_view, recompute_advice
 
-app = FastAPI(title="Dark Energy")
+app = FastAPI(title="HausWatt")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -92,7 +93,9 @@ def advice(household_id: str, device_id: int | None = None, category: str | None
     conn = db()
     try:
         _require_household(conn, household_id)
-        items = _ranked_advice(conn, household_id)
+        # Read the precomputed payload; compute once if it has never been built.
+        cached = get_cached_advice(conn, household_id)
+        items = json.loads(cached) if cached is not None else recompute_advice(conn, household_id)
     finally:
         conn.close()
     if category is not None:
@@ -107,12 +110,17 @@ def advice(household_id: str, device_id: int | None = None, category: str | None
 
 # --- ingest ----------------------------------------------------------------
 
-async def _accept_record(rec: TelemetryRecord) -> dict:
+async def _accept_record(rec: TelemetryRecord, recompute: bool = True) -> dict:
     conn = db()
     try:
         _require_household(conn, rec.household_id)
         from ..db import upsert_telemetry
         upsert_telemetry(conn, rec)
+        # New data invalidates the dashboard advice — recompute it now, off the
+        # GET /view request path, so the next page load is a pure read. Bulk
+        # callers pass recompute=False and recompute once after the whole batch.
+        if recompute:
+            recompute_advice(conn, rec.household_id)
     finally:
         conn.close()
     residual = rec.balance_residual()
@@ -156,7 +164,16 @@ async def ingest_reading(reading: DeviceReading):
 
 @app.post("/api/ingest/batch")
 async def ingest_batch(records: list[TelemetryRecord]):
-    results = [await _accept_record(r) for r in records]
+    results = [await _accept_record(r, recompute=False) for r in records]
+    # Recompute advice once per affected household, not once per record.
+    affected = list(dict.fromkeys(r.household_id for r in records))
+    if affected:
+        conn = db()
+        try:
+            for hid in affected:
+                recompute_advice(conn, hid)
+        finally:
+            conn.close()
     return {"accepted": len(results)}
 
 

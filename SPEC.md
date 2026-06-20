@@ -1,4 +1,4 @@
-# Dark Energy — Capability Spec
+# HausWatt — Capability Spec
 
 > A living spec for the customer **intelligence layer** over residential energy
 > telemetry. Reflects what exists today (the thin slice) and is structured so
@@ -28,7 +28,7 @@ household's real telemetry. Advice is ranked by annual customer cost benefit.
   radially; top-5 advice by benefit by default; click a node to filter advice to
   that device (or the contract). `GET /api/advice/{hh}?device_id=&category=`.
 
-**Rule categories & rules** (`darkenergy/rules/`):
+**Rule categories & rules** (`hauswatt/rules/`):
 | Category | Rules | Counterfactual |
 |---|---|---|
 | `contract` | `tariff_fit` | reprice year under each alternative tariff |
@@ -68,7 +68,7 @@ realistic capex/savings).
 
 ## 1. Product summary
 
-Dark Energy turns per-device energy data (PV, battery, heat pump, EV, household
+HausWatt turns per-device energy data (PV, battery, heat pump, EV, household
 load) into **forecasts, anomaly detection, and AI-phrased, actionable advice**,
 delivered to a per-household customer dashboard with live updates and one-tap
 actions. The platform is the technical starting point — built as a complete but
@@ -273,7 +273,7 @@ suggested_action_key}` — the phraser may only reuse values in `numbers`.
 
 ## 6. Surfaces (API + CLI)
 
-**CLI:** `darkenergy seed` · `darkenergy serve` · `darkenergy sim --household … [--devices --speed --clock --seed --base-url --limit]`
+**CLI:** `hauswatt seed` · `hauswatt serve` · `hauswatt sim --household … [--devices --speed --clock --seed --base-url --limit]`
 
 **HTTP:**
 | Method | Path | Purpose |

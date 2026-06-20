@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from darkenergy.ingest.mapping import reading_to_record
-from darkenergy.models import DeviceReading, TelemetryRecord
+from hauswatt.ingest.mapping import reading_to_record
+from hauswatt.models import DeviceReading, TelemetryRecord
 
 
 def test_device_reading_merge_holds_balance():

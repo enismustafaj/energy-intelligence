@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dark-energy"
+name = "hauswatt"
 version = "0.1.0"
-description = "Dark Energy — customer intelligence layer over residential energy telemetry"
+description = "HausWatt — customer intelligence layer over residential energy telemetry"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
@@ -24,10 +24,10 @@ openai = ["openai>=1.40"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
 [project.scripts]
-darkenergy = "darkenergy.cli:main"
+hauswatt = "hauswatt.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["darkenergy*"]
+include = ["hauswatt*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

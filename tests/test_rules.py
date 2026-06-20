@@ -9,9 +9,9 @@ iterated without rewriting tests.
 
 from __future__ import annotations
 
-from darkenergy import rules
-from darkenergy.ai.prompts import grounding_violations
-from darkenergy.rules.base import build_context
+from hauswatt import rules
+from hauswatt.ai.prompts import grounding_violations
+from hauswatt.rules.base import build_context
 
 
 def _by_key(conn, hh):
