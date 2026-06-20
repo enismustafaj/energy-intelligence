@@ -1,4 +1,4 @@
-"""FastAPI application: dashboard, ingest API, actions API, and SSE stream.
+"""FastAPI application: data API, ingest API, actions API, and SSE stream.
 
 Tenant separation runs through the whole surface — every route takes a
 ``household_id`` (path or body), validates it, and only ever touches that
@@ -11,12 +11,10 @@ import asyncio
 import json
 import sqlite3
 from datetime import datetime
-from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from .. import actions  # noqa: F401 ensure builtin actions register
 from ..actions import builtin  # noqa: F401
@@ -29,11 +27,19 @@ from ..ingest.mapping import reading_to_record, merge_into_record
 from ..models import DeviceReading, TelemetryRecord
 from .service import household_view, _ranked_advice
 
-BASE = Path(__file__).resolve().parent
-templates = Jinja2Templates(directory=str(BASE / "templates"))
-
 app = FastAPI(title="Dark Energy")
-app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:4173",
+        "http://localhost:4173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 _adapter = MockDeviceAdapter()
 
@@ -49,31 +55,33 @@ def _require_household(conn: sqlite3.Connection, household_id: str) -> None:
         raise HTTPException(status_code=404, detail=f"Unknown household {household_id}")
 
 
-# --- dashboard -------------------------------------------------------------
+# --- client API ------------------------------------------------------------
 
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request):
+@app.get("/api/households")
+def households():
     conn = db()
     try:
-        homes = [dict(conn.execute(
-            "SELECT household_id,name,city,tariff_id FROM households WHERE household_id=?",
-            (hid,)).fetchone()) for hid in household_ids(conn)]
+        homes = [
+            dict(conn.execute(
+                "SELECT household_id,name,city,tariff_id FROM households WHERE household_id=?",
+                (hid,),
+            ).fetchone())
+            for hid in household_ids(conn)
+        ]
     finally:
         conn.close()
-    return templates.TemplateResponse(request, "index.html", {"homes": homes})
+    return {"households": homes}
 
 
-@app.get("/h/{household_id}", response_class=HTMLResponse)
-def dashboard(request: Request, household_id: str):
+@app.get("/api/households/{household_id}/view")
+def household_dashboard_view(household_id: str):
     conn = db()
     try:
         _require_household(conn, household_id)
         view = household_view(conn, household_id)
     finally:
         conn.close()
-    return templates.TemplateResponse(
-        request, "dashboard.html", {"v": view, "hid": household_id}
-    )
+    return view
 
 
 @app.get("/api/advice/{household_id}")

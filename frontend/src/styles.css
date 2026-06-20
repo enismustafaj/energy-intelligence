@@ -1,0 +1,100 @@
+/* Only what Mantine doesn't own: the custom SVG star diagram + a few layout bits. */
+
+body {
+  background:
+    radial-gradient(1200px 480px at 50% -10%, rgba(74, 222, 128, 0.08), transparent),
+    var(--mantine-color-dark-8);
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: 60px;
+  border-bottom: 1px solid var(--mantine-color-dark-4);
+  background: color-mix(in srgb, var(--mantine-color-dark-7) 88%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.brand {
+  cursor: pointer;
+  user-select: none;
+}
+
+.hover-lift {
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.hover-lift:hover {
+  transform: translateY(-3px);
+  border-color: var(--mantine-color-energy-6);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+}
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 1fr);
+  gap: 1.2rem;
+  align-items: start;
+}
+
+.diagram-wrap {
+  position: relative;
+  min-height: 470px;
+  background:
+    radial-gradient(700px 300px at 50% 45%, rgba(74, 222, 128, 0.05), transparent),
+    var(--mantine-color-dark-7);
+}
+
+.hub-summary {
+  position: absolute;
+  top: 1.1rem;
+  left: 1rem;
+  right: 1rem;
+  text-align: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* --- the star --- */
+.star { width: 100%; height: auto; display: block; }
+
+.connector {
+  stroke: var(--mantine-color-dark-4);
+  stroke-width: 2;
+  transition: stroke 0.15s, stroke-width 0.15s;
+}
+.connector.active { stroke: var(--mantine-color-energy-6); stroke-width: 3; }
+
+.node { cursor: pointer; outline: none; }
+
+.hub-circle {
+  fill: url(#hubGrad);
+  stroke: var(--mantine-color-energy-5);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 10px rgba(74, 222, 128, 0.35));
+}
+
+.node-circle {
+  fill: var(--mantine-color-dark-5);
+  stroke: var(--mantine-color-dark-3);
+  stroke-width: 2;
+  transition: stroke 0.15s, fill 0.15s, filter 0.15s;
+}
+.devicenode:hover .node-circle { stroke: var(--mantine-color-energy-6); }
+.devicenode.active .node-circle {
+  stroke: var(--mantine-color-energy-5);
+  fill: #15301f;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 8px rgba(74, 222, 128, 0.4));
+}
+
+.svg-icon { color: var(--mantine-color-gray-1); }
+.node-icon { font-size: 22px; text-anchor: middle; dominant-baseline: middle; }
+.node-sub { font-size: 9px; fill: var(--mantine-color-gray-2); text-anchor: middle; }
+.node-metric { font-size: 9.5px; fill: var(--mantine-color-dark-1); text-anchor: middle; }
+
+@media (max-width: 860px) {
+  .dash-grid { grid-template-columns: 1fr; }
+  .diagram-wrap { min-height: 0; }
+}

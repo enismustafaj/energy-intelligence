@@ -5,12 +5,12 @@ A customer **intelligence layer** over residential energy telemetry.
 
 Dark Energy turns per-device energy data (PV, battery, heat pump, EV, household
 load) into **forecasts, anomaly detection, and AI-phrased, actionable advice**,
-surfaced in a simple per-household dashboard with live updates.
+served through an API for a separate per-household dashboard with live updates.
 
 It ships as a thin but complete slice of the platform: real-time streaming
 (device simulators → ingest API), an ETL/analytics layer, explainable
 forecasting + anomaly detection, a pluggable AI phrasing layer, mocked-but-real
-control actions, and a server-rendered dashboard with SSE.
+control actions, an API backend, and a separate React dashboard using SSE.
 
 ## Capabilities
 
@@ -20,7 +20,7 @@ control actions, and a server-rendered dashboard with SSE.
 | ETL over energy usage & production | `darkenergy/analytics/metrics.py` |
 | Bill forecasting & anomaly detection | `darkenergy/analytics/{forecast,anomalies}.py` |
 | AI layer: insights → user-friendly feedback + actions | `darkenergy/ai/` |
-| Per-household dashboard (insights, forecast, actions) | `darkenergy/web/` |
+| Per-household dashboard (insights, forecast, actions) | `frontend/` + `darkenergy/web/` API |
 
 ### Design principles
 - **One unified telemetry schema** (`models.TelemetryRecord`) is written by both
@@ -44,12 +44,14 @@ control actions, and a server-rendered dashboard with SSE.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"        # add ".[claude]" / ".[openai]" for LLM phrasing
+(cd frontend && npm install)
 
 .venv/bin/darkenergy seed                 # load the dataset into data.db (~140k rows)
-.venv/bin/darkenergy serve                # FastAPI dashboard + API on :8000
+.venv/bin/darkenergy serve                # FastAPI API backend on :8000
+(cd frontend && npm run dev)              # React frontend on :5173
 ```
 
-Open <http://localhost:8000> and pick a household. In another terminal, stream
+Open <http://localhost:5173> and pick a household. In another terminal, stream
 live device data into it:
 
 ```bash
@@ -59,6 +61,22 @@ live device data into it:
 The status card ticks via SSE; the insights feed shows the heat-pump anomaly,
 cheapest-charging-window nudge, and bill-spike insight; the action buttons
 return a mocked effect inline and over the live stream.
+
+## Frontend
+
+The UI is a React + TypeScript Vite app in `frontend/`. Everything frontend
+related, including `package.json`, Vite config, TypeScript config, source, and
+build output, lives there. It talks to the Python backend through JSON endpoints
+under `/api`, plus the existing action and SSE routes.
+
+```bash
+cd frontend
+npm run dev       # Vite on :5173, proxying /api to :8000
+npm run build     # production bundle in frontend/dist
+```
+
+For a deployed frontend served from a different origin, set
+`VITE_API_BASE_URL` to the backend origin before building.
 
 ## AI phrasing backends
 
