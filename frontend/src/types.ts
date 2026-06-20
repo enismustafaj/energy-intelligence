@@ -9,6 +9,7 @@ export type Hub = {
   annual_cost_eur: number;
   consumption_kwh: number;
   pv_production_kwh: number;
+  pv_self_consumption_pct?: number | null;
 };
 
 export type NodeKind = "device" | "contract";
