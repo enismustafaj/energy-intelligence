@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  ActionIcon,
   Alert,
   Anchor,
   Badge,
@@ -14,10 +15,10 @@ import {
   Loader,
   MantineProvider,
   Paper,
-  RingProgress,
   SimpleGrid,
   Stack,
   Text,
+  TextInput,
   ThemeIcon,
   Title,
 } from "@mantine/core";
@@ -25,13 +26,16 @@ import {
   ArrowLeft,
   ArrowRight,
   Bolt,
-  CheckCircle2,
+  Bot,
   Home,
+  MessageSquare,
   RotateCcw,
+  Send,
   ShieldCheck,
   Sparkles,
   TrendingDown,
   TriangleAlert,
+  X,
   Zap,
 } from "lucide-react";
 import { API_BASE_URL, getAdvice, getHouseholdView, listHouseholds, runAction } from "./api";
@@ -54,7 +58,16 @@ type Route = { name: "home" } | { name: "household"; householdId: string };
 
 type ActiveSelection = { type: "all" } | { type: "contract" } | { type: "device"; deviceId: number };
 
-type ActionLogItem = { id: string; message: string; status: string; savings?: number | null };
+type ActionOption = { type: string; label: string };
+
+type ChatMsg = {
+  id: string;
+  role: "user" | "agent";
+  text: string;
+  savings?: number | null;
+  status?: string;
+  suggestions?: ActionOption[];
+};
 
 function parseRoute(): Route {
   const match = window.location.pathname.match(/^\/h\/([^/]+)$/);
@@ -70,6 +83,10 @@ function navigate(path: string): void {
 function formatEuro(value: number | null | undefined): string {
   if (value == null) return "";
   return new Intl.NumberFormat("en", { maximumFractionDigits: 0 }).format(value);
+}
+
+function msgId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
 const CATEGORY_COLOR: Record<string, string> = {
@@ -103,7 +120,7 @@ function App() {
   return (
     <MantineProvider theme={theme} forceColorScheme="light">
       <Topbar />
-      <Container size="lg" py="lg">
+      <Container size="lg" py="lg" className="app-main">
         {route.name === "home" ? <HouseholdPicker /> : <Dashboard householdId={route.householdId} />}
       </Container>
     </MantineProvider>
@@ -232,7 +249,14 @@ function Dashboard({ householdId }: { householdId: string }) {
   const [view, setView] = useState<HouseholdView | null>(null);
   const [selection, setSelection] = useState<ActiveSelection>({ type: "all" });
   const [advice, setAdvice] = useState<Advice[]>([]);
-  const [actionLog, setActionLog] = useState<ActionLogItem[]>([]);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMsg[]>(() => [
+    {
+      id: "greet",
+      role: "agent",
+      text: "Hi — I'm your Dark Energy agent. I can run actions on your devices. Tap an action, or ask me to run one.",
+    },
+  ]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -280,22 +304,25 @@ function Dashboard({ householdId }: { householdId: string }) {
     };
   }, [householdId, selection, view]);
 
+  // live action results stream back here and land in the chat as the agent's reply
   useEffect(() => {
     const stream = new EventSource(`${API_BASE_URL}/api/stream/${householdId}`);
     stream.addEventListener("action", (event) => {
       const data = JSON.parse((event as MessageEvent).data) as ActionEvent;
-      setActionLog((items) => [
-        {
-          id: `${Date.now()}-${data.action_type}`,
-          message: data.message,
-          status: data.status,
-          savings: data.expected_savings_eur,
-        },
-        ...items,
+      setChatMessages((prev) => [
+        ...prev,
+        { id: msgId(), role: "agent", text: data.message, savings: data.expected_savings_eur, status: data.status },
       ]);
+      setChatOpen(true);
     });
     return () => stream.close();
   }, [householdId]);
+
+  // shift main content when the chat is docked
+  useEffect(() => {
+    document.body.classList.toggle("chat-open", chatOpen);
+    return () => document.body.classList.remove("chat-open");
+  }, [chatOpen]);
 
   const selectionLabel = useMemo(() => {
     if (!view || selection.type === "all") return "all devices";
@@ -304,18 +331,47 @@ function Dashboard({ householdId }: { householdId: string }) {
     return node ? node.label : "device";
   }, [selection, view]);
 
-  async function handleAction(actionType: string) {
+  const actionOptions: ActionOption[] = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const a of advice) if (a.action_type) map.set(a.action_type, a.action_label || "Run action");
+    return Array.from(map, ([type, label]) => ({ type, label }));
+  }, [advice]);
+
+  const pushMsg = (m: Omit<ChatMsg, "id">) => setChatMessages((prev) => [...prev, { ...m, id: msgId() }]);
+
+  async function runAgentAction(actionType: string) {
     try {
       await runAction(householdId, actionType);
+      // success message arrives via the SSE 'action' stream
     } catch (err) {
-      setActionLog((items) => [
-        {
-          id: `${Date.now()}-${actionType}-failed`,
-          message: err instanceof Error ? err.message : "Action not available",
-          status: "failed",
-        },
-        ...items,
-      ]);
+      pushMsg({ role: "agent", text: err instanceof Error ? err.message : "That action isn't available.", status: "failed" });
+    }
+  }
+
+  // called when the user clicks an action button on a card
+  function handleAction(actionType: string, label: string) {
+    setChatOpen(true);
+    pushMsg({ role: "user", text: label });
+    runAgentAction(actionType);
+  }
+
+  // called when the user types into the chat
+  function handleChatSubmit(text: string) {
+    pushMsg({ role: "user", text });
+    const lc = text.toLowerCase();
+    const match = actionOptions.find(
+      (o) =>
+        lc.includes(o.type.replace(/_/g, " ")) ||
+        lc.includes(o.label.toLowerCase()) ||
+        o.label.toLowerCase().split(/\s+/).some((w) => w.length > 3 && lc.includes(w)),
+    );
+    if (match) {
+      pushMsg({ role: "agent", text: `On it — running "${match.label}".` });
+      runAgentAction(match.type);
+    } else if (actionOptions.length) {
+      pushMsg({ role: "agent", text: "I can run any of these for you:", suggestions: actionOptions });
+    } else {
+      pushMsg({ role: "agent", text: "There are no actions available for this selection right now." });
     }
   }
 
@@ -332,7 +388,6 @@ function Dashboard({ householdId }: { householdId: string }) {
       </Alert>
     );
 
-  // KPIs from the full household view (stable across selection)
   const hub = view.hub;
   const potentialSavings = view.advice.reduce((sum, a) => sum + (a.benefit_eur ?? 0), 0);
   const issues = view.advice.filter((a) => a.category === "fault").length;
@@ -341,83 +396,88 @@ function Dashboard({ householdId }: { householdId: string }) {
   const rest = advice.slice(1);
 
   return (
-    <Stack gap="md">
-      {/* header */}
-      <Group justify="space-between" align="center" wrap="nowrap">
-        <Group gap="sm" wrap="nowrap">
-          <Anchor c="dimmed" fz="sm" onClick={() => navigate("/")} component="button">
-            <ArrowLeft size={16} />
-          </Anchor>
-          <div>
-            <Title order={1} fz={20} lh={1.2}>
-              {view.household.name}
-            </Title>
-            <Text c="dimmed" fz={12}>
-              {view.household.household_id} · {view.household.city} · {selectionLabel}
-            </Text>
+    <>
+      <Stack gap="md">
+        <Group justify="space-between" align="center" wrap="nowrap">
+          <Group gap="sm" wrap="nowrap">
+            <Anchor c="dimmed" fz="sm" onClick={() => navigate("/")} component="button">
+              <ArrowLeft size={16} />
+            </Anchor>
+            <div>
+              <Title order={1} fz={20} lh={1.2}>
+                {view.household.name}
+              </Title>
+              <Text c="dimmed" fz={12}>
+                {view.household.household_id} · {view.household.city} · {selectionLabel}
+              </Text>
+            </div>
+          </Group>
+          <div className="live-pill">
+            <span className="de-live" aria-hidden="true" /> live
           </div>
         </Group>
-        <div className="live-pill">
-          <span className="de-live" aria-hidden="true" /> live
-        </div>
-      </Group>
 
-      {/* KPI row */}
-      <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
-        <Stat label="Annual cost" value={`€${formatEuro(hub?.annual_cost_eur)}`} sub="this year" />
-        <Stat
-          label="PV self-consumption"
-          value={hub?.pv_self_consumption_pct != null ? `${Math.round(hub.pv_self_consumption_pct)}%` : "—"}
-          sub="solar used on-site"
-        />
-        <Stat
-          label="Potential savings"
-          value={`€${formatEuro(potentialSavings)}`}
-          sub={
-            <Group gap={3} component="span">
-              <TrendingDown size={12} /> across {view.advice.length} tips
-            </Group>
-          }
-          subColor={potentialSavings > 0 ? "energy.7" : "dimmed"}
-        />
-        <Stat
-          label="Issues"
-          value={<span style={{ color: issues ? "var(--mantine-color-red-7)" : undefined }}>{issues}</span>}
-          sub={issues ? "need attention" : "all clear"}
-          subColor={issues ? "red.7" : "dimmed"}
-        />
-      </SimpleGrid>
+        <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
+          <Stat label="Annual cost" value={`€${formatEuro(hub?.annual_cost_eur)}`} sub="this year" />
+          <Stat
+            label="PV self-consumption"
+            value={hub?.pv_self_consumption_pct != null ? `${Math.round(hub.pv_self_consumption_pct)}%` : "—"}
+            sub="solar used on-site"
+          />
+          <Stat
+            label="Potential savings"
+            value={`€${formatEuro(potentialSavings)}`}
+            sub={
+              <Group gap={3} component="span">
+                <TrendingDown size={12} /> across {view.advice.length} tips
+              </Group>
+            }
+            subColor={potentialSavings > 0 ? "energy.7" : "dimmed"}
+          />
+          <Stat
+            label="Issues"
+            value={<span style={{ color: issues ? "var(--mantine-color-red-7)" : undefined }}>{issues}</span>}
+            sub={issues ? "need attention" : "all clear"}
+            subColor={issues ? "red.7" : "dimmed"}
+          />
+        </SimpleGrid>
 
-      {/* live energy flow — the 3D scene */}
-      <Paper withBorder radius="lg" p="md" className="flow-card">
-        <Group justify="space-between" mb={2}>
-          <Text fz={13} c="dimmed">
-            Live energy flow
+        <Paper withBorder radius="lg" p="md" className="flow-card">
+          <Group justify="space-between" mb={2}>
+            <Text fz={13} c="dimmed">
+              Live energy flow
+            </Text>
+            <Text fz={12} c="dimmed">
+              now · {new Date().toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit", hour12: false })}
+            </Text>
+          </Group>
+          <EnergyScene view={view} selection={selection} onSelect={setSelection} />
+        </Paper>
+
+        {featured && <InsightCard advice={featured} onAction={handleAction} />}
+
+        <Group justify="space-between" align="center" mt={4}>
+          <Text fz={15} fw={600}>
+            {selection.type === "all" ? "Recommendations" : `${selectionLabel} · recommendations`}
           </Text>
-          <Text fz={12} c="dimmed">
-            now · {new Date().toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit", hour12: false })}
-          </Text>
+          {selection.type !== "all" && (
+            <Button variant="default" size="compact-sm" leftSection={<RotateCcw size={14} />} onClick={() => setSelection({ type: "all" })}>
+              All devices
+            </Button>
+          )}
         </Group>
-        <EnergyScene view={view} selection={selection} onSelect={setSelection} />
-      </Paper>
+        <AdviceList advice={rest.length ? rest : featured ? [] : advice} onAction={handleAction} emptyAll={!featured} />
+      </Stack>
 
-      {/* featured AI insight */}
-      {featured && <InsightCard advice={featured} onAction={handleAction} />}
-
-      {/* recommendations */}
-      <Group justify="space-between" align="center" mt={4}>
-        <Text fz={15} fw={600}>
-          {selection.type === "all" ? "Recommendations" : `${selectionLabel} · recommendations`}
-        </Text>
-        {selection.type !== "all" && (
-          <Button variant="default" size="compact-sm" leftSection={<RotateCcw size={14} />} onClick={() => setSelection({ type: "all" })}>
-            All devices
-          </Button>
-        )}
-      </Group>
-      <AdviceList advice={rest.length ? rest : featured ? [] : advice} onAction={handleAction} emptyAll={!featured} />
-      <ActionLog items={actionLog} />
-    </Stack>
+      <ChatPanel
+        open={chatOpen}
+        onOpen={() => setChatOpen(true)}
+        onClose={() => setChatOpen(false)}
+        messages={chatMessages}
+        onSubmit={handleChatSubmit}
+        onRun={handleAction}
+      />
+    </>
   );
 }
 
@@ -662,7 +722,7 @@ function EnergyScene({
   );
 }
 
-function InsightCard({ advice, onAction }: { advice: Advice; onAction: (actionType: string) => void }) {
+function InsightCard({ advice, onAction }: { advice: Advice; onAction: (actionType: string, label: string) => void }) {
   return (
     <Paper withBorder radius="lg" p="lg" className="insight-card">
       <Group justify="space-between" mb={10} wrap="nowrap">
@@ -686,7 +746,7 @@ function InsightCard({ advice, onAction }: { advice: Advice; onAction: (actionTy
       </Text>
       <Group gap="xs" wrap="wrap">
         {advice.action_type && (
-          <Button size="sm" color="energy" leftSection={<Zap size={15} />} onClick={() => onAction(advice.action_type as string)}>
+          <Button size="sm" color="energy" leftSection={<Zap size={15} />} onClick={() => onAction(advice.action_type as string, advice.action_label || "Take action")}>
             {advice.action_label || "Take action"}
           </Button>
         )}
@@ -706,7 +766,7 @@ function AdviceList({
   emptyAll,
 }: {
   advice: Advice[];
-  onAction: (actionType: string) => void;
+  onAction: (actionType: string, label: string) => void;
   emptyAll?: boolean;
 }) {
   if (!advice.length)
@@ -755,7 +815,7 @@ function AdviceList({
           )}
           {item.action_type && (
             <Group justify="flex-end" mt="sm">
-              <Button size="sm" color="energy" leftSection={<Zap size={15} />} onClick={() => onAction(item.action_type as string)}>
+              <Button size="sm" color="energy" leftSection={<Zap size={15} />} onClick={() => onAction(item.action_type as string, item.action_label || "Take action")}>
                 {item.action_label || "Take action"}
               </Button>
             </Group>
@@ -766,29 +826,100 @@ function AdviceList({
   );
 }
 
-function ActionLog({ items }: { items: ActionLogItem[] }) {
-  if (!items.length) return null;
+function ChatPanel({
+  open,
+  onOpen,
+  onClose,
+  messages,
+  onSubmit,
+  onRun,
+}: {
+  open: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  messages: ChatMsg[];
+  onSubmit: (text: string) => void;
+  onRun: (actionType: string, label: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+  }, [messages, open]);
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const t = text.trim();
+    if (!t) return;
+    onSubmit(t);
+    setText("");
+  }
+
   return (
-    <Stack gap="xs" mt="sm">
-      {items.map((item) => (
-        <Alert
-          key={item.id}
-          variant="light"
-          color={item.status === "failed" ? "red" : "energy"}
-          icon={item.status === "failed" ? <TriangleAlert size={16} /> : <CheckCircle2 size={16} />}
-          p="sm"
-        >
-          <Group justify="space-between" wrap="nowrap" gap="sm">
-            <Text fz="sm">{item.message}</Text>
-            {item.savings && item.savings > 0 ? (
-              <Text fz="sm" fw={600} c="energy.8">
-                ~€{item.savings}/yr
+    <>
+      <aside className={`chat-panel${open ? " open" : ""}`} aria-hidden={!open}>
+        <div className="chat-head">
+          <Group gap={8}>
+            <div className="agent-chip">
+              <Bot size={16} />
+            </div>
+            <div>
+              <Text fw={600} fz={14} lh={1.1}>
+                Dark Energy agent
               </Text>
-            ) : null}
+              <Text c="dimmed" fz={11}>
+                runs actions on your devices
+              </Text>
+            </div>
           </Group>
-        </Alert>
-      ))}
-    </Stack>
+          <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label="Close chat">
+            <X size={16} />
+          </ActionIcon>
+        </div>
+
+        <div className="chat-body" ref={bodyRef}>
+          {messages.map((m) => (
+            <div key={m.id} className={`bubble ${m.role}${m.status === "failed" ? " err" : ""}`}>
+              <div className="bubble-text">
+                {m.status === "failed" && <TriangleAlert size={13} style={{ verticalAlign: "-2px", marginRight: 4 }} />}
+                {m.text}
+              </div>
+              {m.savings && m.savings > 0 ? <div className="bubble-savings">~€{m.savings}/yr saved</div> : null}
+              {m.suggestions && m.suggestions.length > 0 && (
+                <div className="bubble-actions">
+                  {m.suggestions.map((s) => (
+                    <button key={s.type} type="button" className="bubble-action" onClick={() => onRun(s.type, s.label)}>
+                      <Zap size={12} /> {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <form className="chat-input" onSubmit={submit}>
+          <TextInput
+            value={text}
+            onChange={(e) => setText(e.currentTarget.value)}
+            placeholder="Ask the agent to run an action…"
+            size="sm"
+            radius="md"
+            style={{ flex: 1 }}
+          />
+          <ActionIcon type="submit" size={36} radius="md" color="energy" variant="filled" aria-label="Send">
+            <Send size={16} />
+          </ActionIcon>
+        </form>
+      </aside>
+
+      {!open && (
+        <button type="button" className="chat-fab" onClick={onOpen} aria-label="Open agent chat">
+          <MessageSquare size={20} />
+        </button>
+      )}
+    </>
   );
 }
 
